@@ -1,0 +1,18 @@
+# --- LLM 配置 ---
+# 如果直接使用 LiteLLM 的 Gemini 支持，只需填写此项:
+GOOGLE_API_KEY="your_google_api_key"
+
+# 如果通过 OpenAI 兼容代理访问 (例如 OneAPI 或 Google 官方的 OpenAI 兼容端点):
+# OPENAI_API_KEY=YOUR_KEY
+# OPENAI_API_BASE=https://generativelanguage.googleapis.com/v1beta/openai/
+
+# 模型定义 (LiteLLM 格式)
+MODEL_NAME=llm_model_name
+
+# --- 数据库配置 ---
+# 这里的 'db' 是 docker-compose.yml 中定义的数据库服务名
+DATABASE_URL=postgresql://tars:tars_pass@db:5432/tars_db
+
+# --- 其他配置 ---
+# Agent 工作目录 (容器内部路径)
+WORKSPACE_DIR=/app/data

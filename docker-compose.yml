@@ -1,0 +1,37 @@
+
+services:
+  db:
+    image: ankane/pgvector:latest
+    container_name: tars_db
+    environment:
+      POSTGRES_USER: tars
+      POSTGRES_PASSWORD: tars_pass
+      POSTGRES_DB: tars_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tars -d tars_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: tars_agent
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - ./data/workspace:/app/data
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://tars:tars_pass@db:5432/tars_db
+    stdin_open: true
+    tty: true
+
+volumes:
+  postgres_data:

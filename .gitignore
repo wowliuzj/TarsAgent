@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+dist/
+build/
+
+# Tars Specific
+.env
+data/
+list_models.py
+
+# Docker
+.docker/
+
+# OS
+.DS_Store
+Thumbs.db

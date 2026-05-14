@@ -1,0 +1,9 @@
+litellm
+typer[all]
+sqlalchemy
+psycopg2-binary
+pgvector
+python-dotenv
+pydantic
+sqlmodel
+rich
