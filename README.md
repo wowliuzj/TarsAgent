@@ -39,10 +39,13 @@ docker-compose up -d db
 
 ### 4. 运行交互式 Agent
 ```bash
+# 创建虚拟环境
+python3 -m venv venv
+source venv/bin/activate
 # 安装依赖
 pip install -r requirements.txt
 # 运行
-./tars -it
+./tars
 ```
 
 ## 📂 项目结构
