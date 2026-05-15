@@ -11,14 +11,30 @@ if not os.path.exists(LOG_DIR):
 today = datetime.now().strftime('%Y-%m-%d')
 LOG_FILE = os.path.join(LOG_DIR, f"tars-{today}.log")
 
-# 配置 logging
+# 配置全局 logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
     handlers=[
         logging.FileHandler(LOG_FILE, encoding='utf-8'),
+        # 注意：这里没有 StreamHandler，所以默认不会输出到控制台
     ]
 )
+
+# 显式禁止某些极其啰嗦的库输出到控制台
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("litellm").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+# 针对 LiteLLM 的特殊静默设置
+try:
+    import litellm
+    litellm.set_verbose = False
+    litellm.suppress_debug_info = True
+    # 彻底关闭它那个讨厌的 "Give Feedback" 提示
+    litellm._disable_debugging_on_proxy = True
+except ImportError:
+    pass
 
 logger = logging.getLogger("Tars")
 

@@ -49,6 +49,9 @@ class TarsMessage(SQLModel, table=True):
     # 反向关联到会话
     session: TarsSession = Relationship(back_populates="messages")
 
+# 获取向量维度配置
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", 768))
+
 class KnowledgeBase(SQLModel, table=True):
     """
     预留知识库模型：用于将来实现 RAG (检索增强生成)。
@@ -58,9 +61,8 @@ class KnowledgeBase(SQLModel, table=True):
     
     id: Optional[int] = Field(default=None, primary_key=True)
     content: str
-    # 向量字段：用于语义搜索。1536 维度通常对应 OpenAI 的 embedding-3 系列，
-    # 如果使用 Gemini/Gemma，可能需要调整为 768 或 3072。
-    embedding: Any = Field(sa_column=Column(Vector(1536))) 
+    # 向量字段：用于语义搜索。
+    embedding: Any = Field(sa_column=Column(Vector(EMBEDDING_DIM))) 
     # 元数据字段，改名为 kb_metadata 以避开 SQLModel 内置属性
     kb_metadata: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
 

@@ -16,6 +16,11 @@ TAVILY_API_KEY=tvly-你的API密钥
 # 这里的 'db' 是 docker-compose.yml 中定义的数据库服务名
 DATABASE_URL=postgresql://tars:tars_pass@db:5432/tars_db
 
+# --- RAG (长期记忆) 配置 ---
+# 默认使用 Google 的 text-embedding-004 (768维)
+EMBEDDING_MODEL=gemini/text-embedding-004
+EMBEDDING_DIM=768
+
 # --- 其他配置 ---
 # Agent 工作目录 (容器内部路径)
 WORKSPACE_DIR=/app/data

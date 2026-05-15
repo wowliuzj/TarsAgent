@@ -70,10 +70,96 @@ def list_files(directory: str = ".") -> str:
     except Exception as e:
         return f"列出目录失败: {str(e)}"
 
+from litellm import embedding
+from app.db import engine, KnowledgeBase, Session, select
+from sqlalchemy import text
+
+def memory_save(content: str) -> str:
+    """
+    [Tier 1] 将重要信息永久存入 Tars 的长期记忆库中。
+    """
+    try:
+        model = os.getenv("EMBEDDING_MODEL", "gemini/text-embedding-004")
+        # 生成向量
+        response = embedding(
+            model=model,
+            input=[content]
+        )
+        vec = response.data[0]['embedding']
+        
+        # 存入数据库
+        with Session(engine) as session:
+            new_kb = KnowledgeBase(content=content, embedding=vec)
+            session.add(new_kb)
+            session.commit()
+        return f"记忆成功保存。内容摘要: {content[:30]}..."
+    except Exception as e:
+        return f"记忆保存失败: {str(e)}"
+
+def memory_search(query: str, top_k: int = 3) -> str:
+    """
+    [Tier 1] 在长期记忆库中搜索相关内容。
+    """
+    try:
+        model = os.getenv("EMBEDDING_MODEL", "gemini/text-embedding-004")
+        # 生成查询向量
+        response = embedding(
+            model=model,
+            input=[query]
+        )
+        query_vec = response.data[0]['embedding']
+        
+        # 使用 PGVector 进行相似度搜索 (L2 距离)
+        with Session(engine) as session:
+            # SQLModel 对原生向量操作符支持较复杂，这里使用 text 辅助
+            statement = select(KnowledgeBase).order_by(
+                KnowledgeBase.embedding.l2_distance(query_vec)
+            ).limit(top_k)
+            
+            results = session.exec(statement).all()
+            
+            if not results:
+                return "在记忆库中未找到相关记录。"
+            
+            output = "找回的相关记忆:\n"
+            for i, res in enumerate(results):
+                output += f"[{i+1}] {res.content}\n"
+            return output
+    except Exception as e:
+        return f"记忆搜索失败: {str(e)}"
+
 from app.skills import DYNAMIC_SKILL_TOOLS, execute_skill_module
 
 # --- Tier 1: 基础系统工具 (Base Tools) ---
 TIER1_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "memory_save",
+            "description": "[Tier 1] 永久保存一条信息到长期记忆库，用于后续检索。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "要保存的文本内容"}
+                },
+                "required": ["content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "memory_search",
+            "description": "[Tier 1] 根据语义搜索长期记忆库中的相关内容。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "搜索关键词或问题"}
+                },
+                "required": ["query"]
+            }
+        }
+    },
     {
         "type": "function",
         "function": {
@@ -137,6 +223,8 @@ TOOLS = TIER1_TOOLS + DYNAMIC_SKILL_TOOLS
 
 # 构建工具映射表
 TOOL_MAP = {
+    "memory_save": memory_save,
+    "memory_search": memory_search,
     "run_terminal_command": run_terminal_command,
     "read_file": read_file,
     "write_file": write_file,

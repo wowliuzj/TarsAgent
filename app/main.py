@@ -91,6 +91,9 @@ def run_chat_step(agent: TarsAgent, user_input: str):
     """
     运行单次对话循环：显示输入、启动思考引擎、打印最终回复。
     """
+    # 强行清洗输入内容，防止回退符或不可见字符导致的 UTF-8 编码错误
+    user_input = user_input.encode('utf-8', 'ignore').decode('utf-8')
+
     console.print(Rule("User Input", style="dim"))
     console.print(user_input)
     

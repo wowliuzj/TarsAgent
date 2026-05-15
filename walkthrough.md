@@ -11,12 +11,17 @@
 - **SSL/网络连接问题**: 修复了原生爬虫由于代理 IP 被拦截（人机验证）导致的 `ConnectError`。已全面切换至 Tavily API 接口，确保了联网搜索的稳定性。
 - **模块化 Skill 设计**: 确立了 `manifests/skill.json` (语义) + `src/executor.py` (逻辑) 的标准结构，实现了声明与实现的分离。
 - **增强型日志管理**: 引入了按日期切分的日志系统 (`logs/tars-YYYY-MM-DD.log`)，并将控制台冗长的 Traceback 报错重定向至静默日志中，极大提升了 UI 交互的清爽度。
-- **动态参数校验**: 利用 `skill.json` 中的 JSON Schema，让 LLM 在调用技能时能自动遵循参数约束（如 Symbol 必须大写等）。
+- **动态参数校验**: 利用 `skill.json` 中的 JSON Schema，让 LLM 在调用技能时能自动遵循参数约束。
+- **RAG 维度锁定 (重要)**: 确立了基于环境变量的 `EMBEDDING_DIM` 配置。
+- **主动记忆闭环 (The Memory Loop)**: 
+    - **前置检索**: Agent 在响应前会静默执行向量搜索，将相关记忆注入 Prompt。
+    - **后置反思**: 引入了 Reflection 步进，让 Tars 在任务结束后自主提取并保存关键事实（偏好、修正、重要数据）。
 
 ## 3. 运行环境
-- **模型建议**: 推荐使用 `gemini/gemini-1.5-flash` 以获得更好的工具调用稳定性。
-- **搜索服务**: 需要在 `.env` 中配置 `TAVILY_API_KEY`。
-- **容器挂载**: 新增了 `./app/skills` 和 `./logs` 的挂载，支持热更新技能和宿主机直接查看日志。
+- **模型建议**: 推荐使用 `gemini/gemini-1.5-flash` 或 `gemini/gemma-4-26b-a4b-it`。
+- **向量维度**: 默认配置已升级至 **3072** 维（适配 `gemini-embedding-2`）。
+- **输入净化**: 系统已内置 UTF-8 强力清洗逻辑，兼容包含控制字符的终端输入。
+- **容器挂载**: 新增了 `./app/skills` 和 `./logs` 的挂载，支持热更新技能。
 
 ## 4. 下一步开发计划 (Next Steps)
 1.  **技能自我学习 (Agentic Self-Improvement)**: 实现 `install_skill` 工具，让 Tars 能通过对话自主编写、测试并安装新的 Tier 2 技能。
