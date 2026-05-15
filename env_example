@@ -9,6 +9,9 @@ GOOGLE_API_KEY="your_google_api_key"
 # 模型定义 (LiteLLM 格式)
 MODEL_NAME=llm_model_name
 
+#tavily.com api key
+TAVILY_API_KEY=tvly-你的API密钥
+
 # --- 数据库配置 ---
 # 这里的 'db' 是 docker-compose.yml 中定义的数据库服务名
 DATABASE_URL=postgresql://tars:tars_pass@db:5432/tars_db

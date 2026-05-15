@@ -26,6 +26,8 @@ services:
     volumes:
       - .:/app
       - ./data/workspace:/app/data
+      - ./app/skills:/app/skills
+      - ./logs:/app/logs
     env_file:
       - .env
     environment:

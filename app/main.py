@@ -84,6 +84,9 @@ def chat(
             # 执行本轮对话
             run_chat_step(agent, user_input)
 
+import traceback
+from app.logger import logger
+
 def run_chat_step(agent: TarsAgent, user_input: str):
     """
     运行单次对话循环：显示输入、启动思考引擎、打印最终回复。
@@ -101,10 +104,13 @@ def run_chat_step(agent: TarsAgent, user_input: str):
             console.print("\n")
             console.print(Panel(result, title="Tars Final Response", border_style="green"))
         except Exception as e:
-            # 捕获并友好显示运行过程中的任何异常
-            console.print(f"\n[bold red]执行出错:[/bold red] {str(e)}")
-            import traceback
-            console.print(traceback.format_exc(), style="dim")
+            # 记录详细错误到日志，不在屏幕显示
+            logger.error(f"Agent 执行过程中抛出异常:\n{traceback.format_exc()}")
+            
+            # 提取异常的第一行作为提示
+            error_msg = str(e).split('\n')[0]
+            console.print(f"\n[bold red]思考失败：[/bold red]{error_msg}")
+            console.print("[dim]详情请查阅 logs/tars.log[/dim]")
 
 if __name__ == "__main__":
     # 启动 Typer 应用

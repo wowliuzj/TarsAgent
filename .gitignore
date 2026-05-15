@@ -19,3 +19,4 @@ list_models.py
 # OS
 .DS_Store
 Thumbs.db
+/logs

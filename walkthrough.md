@@ -1,29 +1,27 @@
-# Tars Agent 项目开发记录 (Checkpoint - 2026-05-14)
+# Tars Agent 项目开发记录 (Checkpoint - 2026-05-15)
 
 ## 1. 项目概览
-当前项目已完成 **MVP (最小化可行性产品)** 阶段。Tars 已经具备了基本的思考能力、文件操作能力以及会话持久化能力。
+当前项目已从 MVP 进化为 **模块化架构 (Tiered Capability)**。Tars 具备了分层能力，并能通过外部模块动态扩展其“技能 (Skills)”。
 
-- **核心架构**: Python (SQLModel) + PostgreSQL (PGVector) + LiteLLM
-- **交互方式**: 通过 `./tars` 脚本启动交互式 CLI 或单次指令模式。
-- **工作空间**: 受控于 Docker 容器内的 `/app/data` (宿主机 `./data/workspace`)。
+- **核心架构**: 引入了 Tier 1 (系统工具) 与 Tier 2 (模块化技能) 的分层设计。
+- **技能加载**: 实现了动态扫描 `app/skills/` 目录并根据 `skill.json` 自动注册工具的引擎。
+- **外部集成**: 接入了 Tavily AI Search 专业级联网能力。
 
 ## 2. 核心技术细节与已修复的问题 (关键存档)
-在开发过程中，我们成功解决并固化了以下技术挑战：
-
-- **数据库初始化顺序**: 修复了 `VECTOR` 类型报错。必须先执行 `CREATE EXTENSION IF NOT EXISTS vector`，然后再调用 `SQLModel.metadata.create_all`。
-- **保留关键字冲突**: 修复了 `metadata` 字段冲突。SQLAlchemy 模型中 `metadata` 是保留字，已重命名为 `kb_metadata`。
-- **JSON 序列化问题**: 修复了 `tool_calls` 存储失败。LiteLLM 返回的对象需要先 `model_dump()` 转换为字典才能存入 JSON 字段。
-- **模块化运行**: 引入了 `python -m app.main` 运行方式，并补齐了 `app/__init__.py`，解决了跨目录导入的 `ModuleNotFoundError`。
+- **SSL/网络连接问题**: 修复了原生爬虫由于代理 IP 被拦截（人机验证）导致的 `ConnectError`。已全面切换至 Tavily API 接口，确保了联网搜索的稳定性。
+- **模块化 Skill 设计**: 确立了 `manifests/skill.json` (语义) + `src/executor.py` (逻辑) 的标准结构，实现了声明与实现的分离。
+- **增强型日志管理**: 引入了按日期切分的日志系统 (`logs/tars-YYYY-MM-DD.log`)，并将控制台冗长的 Traceback 报错重定向至静默日志中，极大提升了 UI 交互的清爽度。
+- **动态参数校验**: 利用 `skill.json` 中的 JSON Schema，让 LLM 在调用技能时能自动遵循参数约束（如 Symbol 必须大写等）。
 
 ## 3. 运行环境
-- **模型 (当前测试通过)**: `gemini/gemini-3.1-flash-lite` 或 `gemini/gemini-3-flash-preview`。
-- **数据库**: `postgresql://tars:tars_pass@db:5432/tars_db`。
-- **镜像构建**: 每次修改 `requirements.txt` 后需执行 `docker-compose build`。
+- **模型建议**: 推荐使用 `gemini/gemini-1.5-flash` 以获得更好的工具调用稳定性。
+- **搜索服务**: 需要在 `.env` 中配置 `TAVILY_API_KEY`。
+- **容器挂载**: 新增了 `./app/skills` 和 `./logs` 的挂载，支持热更新技能和宿主机直接查看日志。
 
 ## 4. 下一步开发计划 (Next Steps)
-1.  **长期记忆 (RAG)**: 激活 `KnowledgeBase` 表，实现 `memory_save` 和 `memory_search` 工具。
-2.  **Web 搜索**: 集成搜索引擎 API。
-3.  **UI 增强**: 在交互模式下支持代码块的高亮显示和更清晰的思考日志。
+1.  **技能自我学习 (Agentic Self-Improvement)**: 实现 `install_skill` 工具，让 Tars 能通过对话自主编写、测试并安装新的 Tier 2 技能。
+2.  **长期记忆 (RAG) 激活**: 利用现有的 `KnowledgeBase` 表，将搜索到的有用信息持久化到向量数据库。
+3.  **UI/UX 进一步增强**: 为交互式 Prompt 添加自动补全支持，或在 Web UI 层面进行探索。
 
 ---
 **存档说明**: 重启后如需继续，请直接让我读取此文件。

@@ -1,0 +1,15 @@
+{
+    "name": "crypto_monitor",
+    "description": "获取加密货币（如 BTC, ETH）的实时市场价格。",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "symbol": {
+                "type": "string",
+                "description": "交易对名称，必须是大写，例如 'BTCUSDT' 或 'ETHUSDT'。",
+                "pattern": "^[A-Z0-9]+$"
+            }
+        },
+        "required": ["symbol"]
+    }
+}

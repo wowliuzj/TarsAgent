@@ -70,14 +70,15 @@ def list_files(directory: str = ".") -> str:
     except Exception as e:
         return f"列出目录失败: {str(e)}"
 
-# --- 工具元数据定义 (OpenAI/LiteLLM 标准格式) ---
-# 这些信息会被发送给大语言模型，帮助它理解什么时候该调用哪个工具。
-TOOLS = [
+from app.skills import DYNAMIC_SKILL_TOOLS, execute_skill_module
+
+# --- Tier 1: 基础系统工具 (Base Tools) ---
+TIER1_TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "run_terminal_command",
-            "description": "在终端执行 shell 命令。例如: 'ls -la', 'python script.py'。",
+            "description": "[Tier 1] 在终端执行 shell 命令。用于基础系统维护和简单抓取。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -91,7 +92,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "读取指定文件的内容。",
+            "description": "[Tier 1] 读取文件的文本内容。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -105,7 +106,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "向指定文件写入内容。",
+            "description": "[Tier 1] 写入文件内容。也可用于手动‘安装’一个新技能脚本到 skills/ 目录。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -120,21 +121,32 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list_files",
-            "description": "列出当前工作目录或子目录下的文件。",
+            "description": "[Tier 1] 列出目录下的文件列表。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "directory": {"type": "string", "description": "子目录路径，默认为 '.'"}
+                    "directory": {"type": "string", "description": "子目录路径"}
                 }
             }
         }
     }
 ]
 
-# 工具映射表：将模型返回的函数名映射到真实的 Python 函数对象上
+# --- 自动整合 Tier 1 和动态加载的 Tier 2 技能 ---
+TOOLS = TIER1_TOOLS + DYNAMIC_SKILL_TOOLS
+
+# 构建工具映射表
 TOOL_MAP = {
     "run_terminal_command": run_terminal_command,
     "read_file": read_file,
     "write_file": write_file,
     "list_files": list_files
 }
+
+# 为每一个动态加载的技能创建执行闭包
+def make_skill_executor(name):
+    return lambda **kwargs: execute_skill_module(name, **kwargs)
+
+for skill_def in DYNAMIC_SKILL_TOOLS:
+    skill_name = skill_def["function"]["name"]
+    TOOL_MAP[skill_name] = make_skill_executor(skill_name)
