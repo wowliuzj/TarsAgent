@@ -1,6 +1,9 @@
 {
     "name": "crypto_monitor",
-    "description": "获取加密货币（如 BTC, ETH）的实时市场价格。",
+    "version": "1.0.0",
+    "description": "监控加密货币（如 BTC, ETH）的实时价格。",
+    "runtime": "python",
+    "main": "src/executor.py",
     "parameters": {
         "type": "object",
         "properties": {

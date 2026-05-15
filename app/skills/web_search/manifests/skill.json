@@ -1,6 +1,9 @@
 {
     "name": "web_search",
-    "description": "执行全网搜索以获取实时新闻、事实或背景信息。适用于回答时效性强的问题。",
+    "version": "1.0.0",
+    "description": "执行全网搜索以获取实时新闻、事实或背景信息。",
+    "runtime": "python",
+    "main": "src/executor.py",
     "parameters": {
         "type": "object",
         "properties": {

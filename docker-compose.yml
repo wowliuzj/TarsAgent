@@ -28,6 +28,7 @@ services:
       - ./data/workspace:/app/data
       - ./app/skills:/app/skills
       - ./logs:/app/logs
+      - python_libs:/usr/local/lib/python3.10/site-packages
     env_file:
       - .env
     environment:
@@ -37,3 +38,4 @@ services:
 
 volumes:
   postgres_data:
+  python_libs:

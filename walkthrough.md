@@ -9,7 +9,18 @@
 
 ## 2. 核心技术细节与已修复的问题 (关键存档)
 - **SSL/网络连接问题**: 修复了原生爬虫由于代理 IP 被拦截（人机验证）导致的 `ConnectError`。已全面切换至 Tavily API 接口，确保了联网搜索的稳定性。
-- **模块化 Skill 设计**: 确立了 `manifests/skill.json` (语义) + `src/executor.py` (逻辑) 的标准结构，实现了声明与实现的分离。
+
+### 🏗️ 核心运行环境 (Runtime)
+- **输入清洗 (Main Loop)**: `app/main.py` 自动过滤用户输入中的特殊字符。
+- **动态深度**: 通过 `.env` 中的 `MAX_STEPS` 控制 Agent 的最大思考步数。
+- **持久化依赖**: Docker 容器通过 `python_libs` 卷挂载了 `/usr/local/lib/python3.10/site-packages`，使得 Agent 自行安装的库在重启后依然有效。
+
+### 🧩 模块化技能开发 (Skills System)
+现在的技能开发遵循以下标准结构：
+- **目录**: `app/skills/[skill_name]/`
+- **清单**: `manifests/skill.json` (使用 `main` 指定入口，`runtime` 指定环境)。
+- **依赖**: 根目录下的 `requirements.txt` (系统启动时会自动扫描并安装)。
+- **入口**: 默认 `src/executor.py`，参数以 JSON 字符串形式传入命令行。
 - **增强型日志管理**: 引入了按日期切分的日志系统 (`logs/tars-YYYY-MM-DD.log`)，并将控制台冗长的 Traceback 报错重定向至静默日志中，极大提升了 UI 交互的清爽度。
 - **动态参数校验**: 利用 `skill.json` 中的 JSON Schema，让 LLM 在调用技能时能自动遵循参数约束。
 - **RAG 维度锁定 (重要)**: 确立了基于环境变量的 `EMBEDDING_DIM` 配置。

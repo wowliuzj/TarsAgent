@@ -77,7 +77,7 @@ class TarsAgent:
             history.insert(1, {"role": "system", "content": memory_prompt})
 
         # 3. 主 ReAct 循环
-        max_steps = 10
+        max_steps = int(os.getenv("MAX_STEPS", 20))
         step = 0
         final_answer = "未能在限步内完成任务。"
         

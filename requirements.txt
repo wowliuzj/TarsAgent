@@ -9,3 +9,5 @@ sqlmodel
 rich
 tavily-python
 requests
+pandas
+openpyxl
