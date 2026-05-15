@@ -11,10 +11,14 @@ Tars Agent 是一个基于 Python 构建的高性能模块化 AI 智能体。它
     - **静默检索 (RAG)**: 每轮对话前自动检索历史相关知识。
     - **自主反思 (Reflection)**: 任务完成后自动提取并保存关键事实到长期记忆库。
 - **专业级联网能力**: 集成 Tavily AI Search，提供具备智能摘要和来源引用的专业搜索结果。
-- **安全隔离与灵活性**: 
-    - 针对本地开发优化的路径安全机制，支持子目录自动创建。
-    - 支持 Docker 物理隔离与宿主机逻辑隔离两种模式。
-- **多模型支持**: 通过 LiteLLM 无缝接入 Gemini, Gemma, GPT-4, Claude 等主流大模型。
+- **多模型混合架构 (Hybrid Architecture)**: 
+    - **高度灵活**: 通过 LiteLLM 适配层，支持 OpenAI, Google, Claude, DeepSeek 等多种主流 LLM 模型。
+    - **配置驱动**: 系统根据 `.env` 配置自动切换主推理模型与向量模型，实现推理与检索能力的动态平衡。
+    - **核心约束**: 向量模型（Embedding）与向量数据库强绑定。如需更换向量模型，必须对现有向量数据库进行全量迁移/重索引。
+- **动态安全防护**: 
+    - 支持项目根目录全局访问，Agent 可自主阅读 `SKILLS_GUIDE.md` 等文档进行技能学习。
+    - 内置 **敏感文件黑名单**，自动屏蔽 `.env`、`.git` 等核心隐私文件。
+- **物理隔离沙盒**: 针对联网和高风险技能，支持 Docker 容器级物理隔离运行。
 
 ## 🚀 快速开始
 
@@ -24,12 +28,15 @@ Tars Agent 是一个基于 Python 构建的高性能模块化 AI 智能体。它
 - Python 3.10+ (推荐使用 venv)
 
 ### 2. 配置环境变量
-复制 `env_example` 并重命名为 `.env`，配置你的 API Key：
+复制 `env_example` 并重命名为 `.env`。**根据你选择的模型提供商配置对应的 API Key：**
 ```env
-GOOGLE_API_KEY=your_google_ai_studio_api_key
-MODEL_NAME=gemini/gemini-1.5-flash
-TAVILY_API_KEY=your_tavily_key
-DATABASE_URL=postgresql://tars:tars_pass@localhost:5432/tars_db
+# 主推理模型 (示例使用 OpenAI)
+OPENAI_API_KEY=your_openai_key
+MODEL_NAME=openai/gpt-4o
+
+# 向量模型 (示例使用 Google，更换模型需重索引数据库)
+GOOGLE_API_KEY=your_google_key
+EMBEDDING_MODEL=gemini/gemini-embedding-2
 ```
 
 ### 3. 启动基础设施

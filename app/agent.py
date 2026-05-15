@@ -14,7 +14,9 @@ console = Console()
 class TarsAgent:
     def __init__(self, session_id: int):
         self.session_id = session_id
-        self.model = os.getenv("MODEL_NAME", "gemini/gemini-1.5-flash")
+        self.model = os.getenv("MODEL_NAME")
+        if not self.model:
+            raise ValueError("错误: 未在环境变量中找到 MODEL_NAME。请检查 .env 文件并确保其包含提供商前缀 (如 openai/gpt-4o)。")
 
     def _get_history(self) -> List[Dict[str, Any]]:
         """从数据库中检索当前会话的所有历史消息。"""

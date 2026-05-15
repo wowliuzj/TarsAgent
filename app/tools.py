@@ -2,86 +2,79 @@ import subprocess
 import os
 from typing import Dict, Any, List
 
-# 工具执行的工作目录 (优先从环境变量读取，默认为相对路径 data)
-WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "data")
+# 项目根目录
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-def get_safe_path(relative_path: str) -> str:
+# 敏感文件黑名单，禁止 Tars 读取或列出
+SENSITIVE_FILES = {".env", ".git", "env_example", "id_rsa", "config.json"}
+
+def is_sensitive(path: str) -> bool:
     """
-    安全路径解析：确保所有文件操作都被限制在 WORKSPACE_DIR 内，
-    同时支持子目录结构。
+    检查路径是否包含敏感文件或目录。
     """
-    # 获取绝对路径并规范化
-    base_abs = os.path.abspath(WORKSPACE_DIR)
-    # 处理可能的绝对路径输入，将其视为相对于工作区的路径
-    if os.path.isabs(relative_path):
-        # 移除开头的斜杠
-        relative_path = relative_path.lstrip(os.path.sep)
+    parts = path.split(os.sep)
+    return any(p in SENSITIVE_FILES for p in parts)
+
+def resolve_path(target_path: str) -> str:
+    """
+    将路径解析为绝对路径。如果是相对路径，则相对于项目根目录。
+    """
+    if os.path.isabs(target_path):
+        abs_path = os.path.normpath(target_path)
+    else:
+        abs_path = os.path.normpath(os.path.join(PROJECT_ROOT, target_path))
     
-    target_abs = os.path.normpath(os.path.join(base_abs, relative_path))
-    
-    # 安全性检查：目标路径必须以工作区绝对路径开头
-    if not target_abs.startswith(base_abs):
-        raise PermissionError(f"访问拒绝: 路径 {relative_path} 超出了工作区范围")
-    
-    return target_abs
+    # 虽然取消了工作区限制，但我们依然禁止访问敏感配置文件
+    if is_sensitive(abs_path):
+        raise PermissionError(f"安全限制: 禁止访问敏感路径 {target_path}")
+        
+    return abs_path
 
 def run_terminal_command(command: str) -> str:
     """
-    在沙箱环境中执行终端命令。
-    Tars 可以利用这个工具运行 shell 脚本、安装包或执行复杂的系统操作。
+    在项目根目录下执行终端命令。
     """
     try:
-        # 确保工作目录存在
-        if not os.path.exists(WORKSPACE_DIR):
-            os.makedirs(WORKSPACE_DIR, exist_ok=True)
-            
-        # 使用 subprocess 执行命令，限制在 WORKSPACE_DIR 目录下执行
         result = subprocess.run(
             command,
             shell=True,
-            cwd=WORKSPACE_DIR,
-            capture_output=True, # 捕获 stdout 和 stderr
-            text=True,           # 以文本模式读取输出
-            timeout=30           # 30秒超时，防止 Agent 运行一个阻塞指令导致系统卡死
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=60
         )
-        output = result.stdout
-        error = result.stderr
-        
         if result.returncode == 0:
-            return output if output else "命令执行成功，无输出。"
+            return result.stdout if result.stdout else "命令执行成功，无输出。"
         else:
-            # 如果退出码不为 0，则返回错误详情供模型分析原因
-            return f"错误 (退出码 {result.returncode}):\n{error}"
+            return f"错误 (退出码 {result.returncode}):\n{result.stderr}"
     except Exception as e:
         return f"执行异常: {str(e)}"
 
 def read_file(file_path: str) -> str:
     """
-    读取工作空间内指定文件的文本内容（支持子目录）。
+    读取文件内容。支持绝对路径或相对于项目根目录的路径。
     """
     try:
-        safe_path = get_safe_path(file_path)
-        if not os.path.isfile(safe_path):
-            return f"读取失败: {file_path} 不是一个文件或不存在"
+        abs_path = resolve_path(file_path)
+        if not os.path.isfile(abs_path):
+            return f"读取失败: {file_path} 不存在或不是文件"
             
-        with open(safe_path, 'r', encoding='utf-8') as f:
+        with open(abs_path, 'r', encoding='utf-8') as f:
             return f.read()
     except Exception as e:
         return f"读取失败: {str(e)}"
 
 def write_file(file_path: str, content: str) -> str:
     """
-    向工作空间写入文件内容。支持自动创建子目录。
+    写入文件内容。
     """
     try:
-        safe_path = get_safe_path(file_path)
-        
-        # 自动创建父目录
-        parent_dir = os.path.dirname(safe_path)
+        abs_path = resolve_path(file_path)
+        parent_dir = os.path.dirname(abs_path)
         if not os.path.exists(parent_dir):
             os.makedirs(parent_dir, exist_ok=True)
             
-        with open(safe_path, 'w', encoding='utf-8') as f:
+        with open(abs_path, 'w', encoding='utf-8') as f:
             f.write(content)
         return f"成功写入到 {file_path}"
     except Exception as e:
@@ -89,16 +82,16 @@ def write_file(file_path: str, content: str) -> str:
 
 def list_files(directory: str = ".") -> str:
     """
-    列出目录下的文件和文件夹结构（支持子目录）。
+    列出目录内容。
     """
     try:
-        safe_path = get_safe_path(directory)
-        if not os.path.isdir(safe_path):
-            return f"列出目录失败: {directory} 不是一个目录或不存在"
+        abs_path = resolve_path(directory)
+        if not os.path.isdir(abs_path):
+            return f"错误: {directory} 不是目录"
             
-        files = os.listdir(safe_path)
-        # 简单过滤，隐藏系统文件
-        files = [f for f in files if not f.startswith('.')]
+        files = os.listdir(abs_path)
+        # 过滤系统文件和黑名单敏感文件
+        files = [f for f in files if not f.startswith('.') and f not in SENSITIVE_FILES]
         return "\n".join(files) if files else "目录为空。"
     except Exception as e:
         return f"列出目录失败: {str(e)}"
@@ -112,7 +105,9 @@ def memory_save(content: str) -> str:
     [Tier 1] 将重要信息永久存入 Tars 的长期记忆库中。
     """
     try:
-        model = os.getenv("EMBEDDING_MODEL", "gemini/text-embedding-004")
+        model = os.getenv("EMBEDDING_MODEL")
+        if not model:
+            raise ValueError("错误: 未在环境变量中找到 EMBEDDING_MODEL。")
         # 生成向量
         response = embedding(
             model=model,
@@ -134,7 +129,9 @@ def memory_search(query: str, top_k: int = 3) -> str:
     [Tier 1] 在长期记忆库中搜索相关内容。
     """
     try:
-        model = os.getenv("EMBEDDING_MODEL", "gemini/text-embedding-004")
+        model = os.getenv("EMBEDDING_MODEL")
+        if not model:
+            raise ValueError("错误: 未在环境变量中找到 EMBEDDING_MODEL。")
         # 生成查询向量
         response = embedding(
             model=model,
@@ -266,7 +263,7 @@ TOOL_MAP = {
 
 # 为每一个动态加载的技能创建执行闭包
 def make_skill_executor(name):
-    return lambda **kwargs: execute_skill_module(name, **kwargs)
+    return lambda **kwargs: execute_skill_module(name, kwargs)
 
 for skill_def in DYNAMIC_SKILL_TOOLS:
     skill_name = skill_def["function"]["name"]

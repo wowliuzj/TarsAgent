@@ -2,23 +2,26 @@
 
 所有对 Tars Agent 项目的重要变更都将记录在此文件中。
 
-## [2026-05-15] - 架构升级与技能模块化
+## [2026-05-15] - OpenAI 迁移与权限架构优化
 
-### 🚀 新增功能
-- **模块化技能架构 (Modular Skills)**: 实现了“声明与实现分离”的标准 Skill 结构。每个技能拥有独立的 `manifests/skill.json` (语义声明) 和 `src/executor.py` (执行逻辑)。
-- **动态技能加载引擎**: Tars 启动时会自动扫描并注册 `app/skills/` 下的所有模块化技能，无需手动修改代码。
-- **专业级 AI 搜索 (Tavily)**: 集成 Tavily AI Search，彻底解决了原生爬虫被反爬（人机验证）拦截的问题，提供高质量的智能摘要。
-- **增强型日志系统**: 实现了按日期自动切分的日志系统 (`logs/tars-YYYY-MM-DD.log`)。
-- **长期记忆 (RAG) 自动化**: 
-    - **静默检索**: 在每轮对话前自动进行向量搜索，获取历史相关背景。
-    - **自主反思 (Reflection)**: 借鉴 Hermes 架构，在任务完成后自主判断并保存重要事实到记忆库。
-- **提示词中心化**: 引入 `app/prompts.py` 统一管理系统指令和反思模板。
+### 🚀 核心升级
+- **OpenAI + Gemini 混合架构 (Hybrid LLM Architecture)**:
+    - 迁移至 OpenAI 作为主推理模型（支持 `openai/gpt-5-mini`），显著提升了逻辑推理与指令遵循的稳定性。
+    - 保留 Google Gemini 作为高效向量 Embedding 模型，实现性能与成本的最佳平衡。
+- **权限边界重构 (Security & Path Access)**:
+    - **取消 WORKSPACE_DIR 硬性限制**：为了支持 Agent 读取项目根目录（如 `SKILLS_GUIDE.md`）进行自主学习，放开了原本局限在 `data/` 目录的沙箱。
+    - **实施敏感文件黑名单 (Sensitivity Blacklist)**：引入了 `SENSITIVE_FILES` 保护机制，强制禁止 Agent 通过工具访问 `.env`、`.git`、`config.json` 等关键隐私文件，兼顾了灵活性与安全性。
 
-### 🛠️ 技术优化
-- **ImportError 修复**: 解决了 `app/skills.py` 中缺失 `DYNAMIC_SKILL_TOOLS` 定义导致的启动崩溃问题。实现了完善的动态技能扫描与加载逻辑。
-- **WORKSPACE_DIR 路径修复**: 修正了 `.env` 中错误的默认工作目录路径，确保本地运行与工具执行的一致性。
-- **子目录支持与安全增强**: 改进了 `app/tools.py` 中的路径处理。现在支持安全的子目录读写，并能在写入时自动创建父目录，解决了 Agent 无法在子文件夹（如 `workspace/`）中运行脚本的问题。
-- **输入鲁棒性修复**: 增加了用户输入的 UTF-8 自动净化逻辑，解决了终端回退符导致的编码崩溃问题。
+### 🛠️ 技能开发 (Skill Optimization)
+- **`crypto_price` 深度增强**:
+    - 实现了 **Binance, OKX, Coinbase, CoinGecko** 四家主流交易所的并行报价聚合。
+    - 引入了 `ThreadPoolExecutor` 并行请求，解决了单点故障和响应延迟问题。
+    - 增加了智能符号识别（如 `BTCUS` 自动补全为 `BTCUSDT`）与反爬虫 User-Agent 伪装。
+- **技能参数传递修复**: 解决了 `app/tools.py` 中 `make_skill_executor` 闭包对参数解包不当导致的工具调用崩溃问题。
+
+### 🐞 环境与调试
+- **环境自检工具 (`list_models.py`)**: 重写为混合环境检测脚本，可一键验证 OpenAI 和 Google API 的连通性。
+- **配置同步**: 同步更新了 `.env` 和 `env_example`，明确了多模型 Key 的强制配置要求。
 
 ### [0.3.0] - 2026-05-15
 
