@@ -6,6 +6,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     git \
     curl \
+    ca-certificates \
     libpq-dev \
     gcc \
     && rm -rf /var/lib/apt/lists/*

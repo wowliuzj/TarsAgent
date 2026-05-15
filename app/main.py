@@ -6,26 +6,30 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.prompt import Prompt
-from rich.panel import Panel
 from sqlmodel import Session, select
 from app.db import init_db, engine, TarsSession
 from app.agent import TarsAgent
 
-# 加载环境变量
+# 加载 .env 环境变量文件，让 os.getenv 能够读取到配置
 load_dotenv()
 
-app = typer.Typer()
+# 初始化 Typer CLI 框架，Typer 是一个能快速将 Python 函数转为命令行指令的库
+app = typer.Typer(help="Tars Agent CLI - 你的命令行智能助手")
 console = Console()
 
 def get_or_create_session(session_id: int = None) -> TarsSession:
-    """获取现有会话或创建新会话。"""
+    """
+    根据 ID 获取现有会话，或者创建一个全新的会话。
+    会话机制确保了 Tars 能够通过数据库关联并找回之前的对话历史。
+    """
     with Session(engine) as session:
         if session_id:
+            # 尝试通过 ID 从 TarsSession 表中查找
             db_session = session.get(TarsSession, session_id)
             if db_session:
                 return db_session
         
-        # 创建新会话
+        # 如果未找到或未提供 ID，则生成一个新的会话记录
         new_session = TarsSession()
         session.add(new_session)
         session.commit()
@@ -34,31 +38,42 @@ def get_or_create_session(session_id: int = None) -> TarsSession:
 
 @app.command()
 def chat(
-    query: Optional[str] = typer.Argument(None, help="你的指令 (如果不输入则进入交互模式)"),
-    session_id: Optional[int] = typer.Option(None, "--session-id", "-s", help="会话ID")
+    query: Optional[str] = typer.Argument(None, help="给 Tars 的指令。如果不填，系统将进入‘持续对话’模式。"),
+    session_id: Optional[int] = typer.Option(None, "--session-id", "-s", help="指定特定的会话 ID 来恢复之前的上下文。")
 ):
-    """与 Tars Agent 进行对话。"""
+    """
+    与 Tars Agent 进行对话的主要入口命令。
+    """
     
-    # 1. 初始化数据库
+    # 1. 初始化数据库结构：确保表已创建，PGVector 扩展已激活
     init_db()
     
-    # 2. 获取或创建会话
+    # 2. 初始化会话上下文
     db_session = get_or_create_session(session_id)
-    console.print(Panel(f"Tars Agent | Session ID: [bold cyan]{db_session.id}[/bold cyan]", border_style="blue"))
+    console.print(Panel(
+        f"Tars Agent 准备就绪 | 会话 ID: [bold cyan]{db_session.id}[/bold cyan]\n"
+        f"模式: {'[yellow]单次指令[/yellow]' if query else '[green]持续对话[/green]'}", 
+        border_style="blue", 
+        title="[bold]System Status[/bold]"
+    ))
     
+    # 3. 实例化核心 Agent
     agent = TarsAgent(session_id=db_session.id)
 
     if query:
-        # 单次指令模式
+        # --- 模式 A：单次指令 ---
+        # 适用于执行一次性的任务，如 `./tars "创建一个 README"`
         run_chat_step(agent, query)
     else:
-        # 交互模式
-        console.print("[dim]提示: 输入 'exit' 或 'quit' 退出，输入 'clear' 清屏[/dim]")
+        # --- 模式 B：交互式对话 ---
+        # 适用于像使用 ChatGPT 一样反复交流
+        console.print("[dim]提示: 输入 'exit' 或 'quit' 退出交互，输入 'clear' 清空屏幕[/dim]")
         while True:
+            # 使用 Rich 的 Prompt 提示符接收用户输入
             user_input = Prompt.ask("\n[bold green]User[/bold green]")
             
             if user_input.lower() in ["exit", "quit"]:
-                console.print("[yellow]Tars 离线。再见。[/yellow]")
+                console.print("[yellow]Tars 状态：已离线。[/yellow]")
                 break
             if user_input.lower() == "clear":
                 console.clear()
@@ -66,23 +81,31 @@ def chat(
             if not user_input.strip():
                 continue
                 
+            # 执行本轮对话
             run_chat_step(agent, user_input)
 
 def run_chat_step(agent: TarsAgent, user_input: str):
-    """执行一步对话。"""
+    """
+    运行单次对话循环：显示输入、启动思考引擎、打印最终回复。
+    """
     console.print(Rule("User Input", style="dim"))
     console.print(user_input)
     
-    with console.status("[bold yellow]Tars 正在思考与行动...[/bold yellow]"):
+    # 在 Agent 思考期间展示一个动态加载动画 (Spinner)
+    with console.status("[bold yellow]Tars 正在分析需求并采取行动...[/bold yellow]"):
         try:
+            # 调用 Agent.run 启动 ReAct 逻辑循环
             result = agent.run(user_input)
-            # 输出最终结果
+            
+            # 打印模型最终确认生成的回复
             console.print("\n")
-            console.print(Panel(result, title="Tars Response", border_style="green"))
+            console.print(Panel(result, title="Tars Final Response", border_style="green"))
         except Exception as e:
-            console.print(f"\n[bold red]发生错误:[/bold red] {str(e)}")
+            # 捕获并友好显示运行过程中的任何异常
+            console.print(f"\n[bold red]执行出错:[/bold red] {str(e)}")
             import traceback
             console.print(traceback.format_exc(), style="dim")
 
 if __name__ == "__main__":
+    # 启动 Typer 应用
     app()
