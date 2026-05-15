@@ -9,6 +9,9 @@
 
 ## 2. 核心技术细节与已修复的问题 (关键存档)
 - **SSL/网络连接问题**: 修复了原生爬虫由于代理 IP 被拦截（人机验证）导致的 `ConnectError`。已全面切换至 Tavily API 接口，确保了联网搜索的稳定性。
+- **ImportError 修复**: 修复了 `app/skills.py` 中缺失 `DYNAMIC_SKILL_TOOLS` 定义导致的启动失败问题。现在已实现完善的动态扫描逻辑。
+- **WORKSPACE_DIR 修复**: 修复了 `.env` 中 `WORKSPACE_DIR` 路径错误（`app/data` -> `data`）导致的工具执行异常。
+- **子目录支持与安全增强**: 改进了 `app/tools.py` 中的路径处理逻辑。现在支持安全的子目录读写，并能在写入时自动创建不存在的目录，解决了 Agent 无法在子文件夹中运行脚本的问题。
 
 ### 🏗️ 核心运行环境 (Runtime)
 - **输入清洗 (Main Loop)**: `app/main.py` 自动过滤用户输入中的特殊字符。

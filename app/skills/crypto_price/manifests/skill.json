@@ -1,0 +1,8 @@
+{
+  "name": "crypto_price",
+  "version": "1.0.0",
+  "description": "查询比特币(BTC)和以太坊(ETH)的实时价格。",
+  "runtime": "python",
+  "main": "src/executor.py",
+  "sandbox": true
+}

@@ -2,9 +2,28 @@ import subprocess
 import os
 from typing import Dict, Any, List
 
-# 工具执行的工作目录 (Docker 内部挂载点)
-# 这是 Agent 的“沙箱”边界，所有文件操作默认都发生在这里。
-WORKSPACE_DIR = "/app/data"
+# 工具执行的工作目录 (优先从环境变量读取，默认为相对路径 data)
+WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "data")
+
+def get_safe_path(relative_path: str) -> str:
+    """
+    安全路径解析：确保所有文件操作都被限制在 WORKSPACE_DIR 内，
+    同时支持子目录结构。
+    """
+    # 获取绝对路径并规范化
+    base_abs = os.path.abspath(WORKSPACE_DIR)
+    # 处理可能的绝对路径输入，将其视为相对于工作区的路径
+    if os.path.isabs(relative_path):
+        # 移除开头的斜杠
+        relative_path = relative_path.lstrip(os.path.sep)
+    
+    target_abs = os.path.normpath(os.path.join(base_abs, relative_path))
+    
+    # 安全性检查：目标路径必须以工作区绝对路径开头
+    if not target_abs.startswith(base_abs):
+        raise PermissionError(f"访问拒绝: 路径 {relative_path} 超出了工作区范围")
+    
+    return target_abs
 
 def run_terminal_command(command: str) -> str:
     """
@@ -12,6 +31,10 @@ def run_terminal_command(command: str) -> str:
     Tars 可以利用这个工具运行 shell 脚本、安装包或执行复杂的系统操作。
     """
     try:
+        # 确保工作目录存在
+        if not os.path.exists(WORKSPACE_DIR):
+            os.makedirs(WORKSPACE_DIR, exist_ok=True)
+            
         # 使用 subprocess 执行命令，限制在 WORKSPACE_DIR 目录下执行
         result = subprocess.run(
             command,
@@ -34,12 +57,13 @@ def run_terminal_command(command: str) -> str:
 
 def read_file(file_path: str) -> str:
     """
-    读取工作空间内指定文件的文本内容。
+    读取工作空间内指定文件的文本内容（支持子目录）。
     """
     try:
-        # 安全检查：目前仅提取文件名，防止 ../../ 类型的路径穿越攻击
-        # 在 MVP 阶段通过 os.path.basename 强制限制在当前层级
-        safe_path = os.path.join(WORKSPACE_DIR, os.path.basename(file_path))
+        safe_path = get_safe_path(file_path)
+        if not os.path.isfile(safe_path):
+            return f"读取失败: {file_path} 不是一个文件或不存在"
+            
         with open(safe_path, 'r', encoding='utf-8') as f:
             return f.read()
     except Exception as e:
@@ -47,11 +71,16 @@ def read_file(file_path: str) -> str:
 
 def write_file(file_path: str, content: str) -> str:
     """
-    向工作空间写入文件内容。如果文件不存在则创建，存在则覆盖。
+    向工作空间写入文件内容。支持自动创建子目录。
     """
     try:
-        # 同样使用 basename 确保安全性
-        safe_path = os.path.join(WORKSPACE_DIR, os.path.basename(file_path))
+        safe_path = get_safe_path(file_path)
+        
+        # 自动创建父目录
+        parent_dir = os.path.dirname(safe_path)
+        if not os.path.exists(parent_dir):
+            os.makedirs(parent_dir, exist_ok=True)
+            
         with open(safe_path, 'w', encoding='utf-8') as f:
             f.write(content)
         return f"成功写入到 {file_path}"
@@ -60,12 +89,16 @@ def write_file(file_path: str, content: str) -> str:
 
 def list_files(directory: str = ".") -> str:
     """
-    列出目录下的文件和文件夹结构，帮助 Agent 了解当前环境。
+    列出目录下的文件和文件夹结构（支持子目录）。
     """
     try:
-        # 拼接目标路径
-        safe_path = os.path.join(WORKSPACE_DIR, directory)
+        safe_path = get_safe_path(directory)
+        if not os.path.isdir(safe_path):
+            return f"列出目录失败: {directory} 不是一个目录或不存在"
+            
         files = os.listdir(safe_path)
+        # 简单过滤，隐藏系统文件
+        files = [f for f in files if not f.startswith('.')]
         return "\n".join(files) if files else "目录为空。"
     except Exception as e:
         return f"列出目录失败: {str(e)}"

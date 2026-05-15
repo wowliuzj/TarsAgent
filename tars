@@ -4,7 +4,14 @@
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$DIR"
 
-# 使用 docker-compose 运行交互式命令
-# -it 确保我们可以进行交互输入
-# --rm 运行完后自动删除容器
-docker-compose run --rm -it app python -m app.main "$@"
+# 1. 后台启动数据库 (如果没启动的话)
+docker-compose up -d db
+
+# 2. 检查并激活虚拟环境 (可选，建议你自己手动创建 venv)
+if [ -d "venv" ]; then
+    source venv/bin/activate
+fi
+
+# 3. 直接运行本体
+# 使用 python3 -m app.main 确保模块导入路径正确
+python3 -m app.main "$@"

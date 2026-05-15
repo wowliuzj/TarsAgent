@@ -17,12 +17,14 @@ TAVILY_API_KEY=tvly-你的API密钥
 DATABASE_URL=postgresql://tars:tars_pass@db:5432/tars_db
 
 # --- RAG (长期记忆) 配置 ---
-# 默认使用 Google 的 text-embedding-004 (768维)
-EMBEDDING_MODEL=gemini/text-embedding-004
-EMBEDDING_DIM=768
+# 默认使用 Google 的 gemini/gemini-embedding-2 (3072维)
+EMBEDDING_MODEL=gemini/gemini-embedding-2
+EMBEDDING_DIM=3072
 
 # --- 其他配置 ---
 # Agent 最大思考步数 (防止无限循环)
 MAX_STEPS=20
 # Agent 工作目录 (容器内部路径)
-WORKSPACE_DIR=/app/data
+WORKSPACE_DIR=data
+# 系统代理
+ALL_PROXY=http://127.0.0.1:7890

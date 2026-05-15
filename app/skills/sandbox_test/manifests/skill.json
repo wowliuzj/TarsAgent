@@ -1,0 +1,13 @@
+{
+  "name": "sandbox_test",
+  "version": "1.0.0",
+  "description": "测试物理沙箱隔离性的安全技能",
+  "main": "src/executor.py",
+  "runtime": "python",
+  "sandbox": true,
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": []
+  }
+}

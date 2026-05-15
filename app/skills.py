@@ -1,52 +1,161 @@
 import os
+import sys
 import json
 import subprocess
-import sys
-from typing import List, Dict, Any
+from app.logger import logger
 
-# 技能存储的根目录
-SKILLS_DIR = "/app/skills"
+def execute_skill_module(skill_name, args):
+    """
+    执行一个技能模块。
+    支持两种模式：
+    1. 逻辑隔离：宿主机 Python 直接运行 (适用于审计过的技能)
+    2. 物理隔离：Docker 容器运行 (适用于第三方或 Tars 自生成的技能)
+    """
+    # 获取技能目录
+    project_root = os.getcwd()
+    skill_path = os.path.join(project_root, "app/skills", skill_name)
+    
+    # 尝试多种路径查找 skill.json
+    manifest_candidates = [
+        os.path.join(skill_path, "manifests", "skill.json"),
+        os.path.join(skill_path, "skill.json")
+    ]
+    
+    manifest_path = None
+    for candidate in manifest_candidates:
+        if os.path.exists(candidate):
+            manifest_path = candidate
+            break
 
-def install_skill_dependencies(skill_path: str):
-    """如果技能目录下存在 requirements.txt，则尝试安装依赖。"""
-    req_path = os.path.join(skill_path, "requirements.txt")
-    if os.path.exists(req_path):
+    if not manifest_path:
+        return f"错误: 技能 {skill_name} 缺少配置文件 (skill.json)"
+
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    runtime = manifest.get("runtime", "python")
+    main_script = manifest.get("main", "main.py")
+    use_sandbox = manifest.get("sandbox", False)
+    
+    args_json = json.dumps(args)
+
+    if use_sandbox:
+        return execute_skill_in_docker(skill_name, skill_path, runtime, main_script, args_json)
+    else:
+        # 宿主机直接执行
+        full_entry_path = os.path.join(skill_path, main_script)
         try:
-            # 使用当前运行环境的 pip 进行安装
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", req_path], 
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-        except Exception as e:
-            print(f"警告: 技能 {skill_path} 依赖安装失败: {e}")
+            result = subprocess.run(
+                [sys.executable, full_entry_path, args_json],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            return result.stdout
+        except subprocess.CalledProcessError as e:
+            return f"技能执行失败: {e.stderr}"
 
-def load_modular_skills() -> List[Dict[str, Any]]:
+def execute_skill_in_docker(skill_name, skill_path, runtime, main_script, args_json):
     """
-    扫描 SKILLS_DIR 下的子目录，读取 skill.json 并生成模型可用的工具列表。
+    在 Docker 容器中物理隔离运行技能
     """
-    tool_definitions = []
-    if not os.path.exists(SKILLS_DIR):
-        os.makedirs(SKILLS_DIR, exist_ok=True)
-        return []
+    project_root = os.getcwd()
+    
+    # 挂载整个 skills 目录，这样技能内部可以通过相对路径访问 (虽然不推荐)
+    # 更好的做法是只挂载当前技能目录
+    skills_root = os.path.join(project_root, "app/skills")
+    
+    # 构建 Docker 命令
+    docker_cmd = [
+        "docker", "run", "--rm",
+        "-v", f"{skills_root}:/app/skills",
+        "-w", f"/app/skills/{skill_name}"
+    ]
 
-    for folder in os.listdir(SKILLS_DIR):
-        folder_path = os.path.join(SKILLS_DIR, folder)
-        if not os.path.isdir(folder_path):
+    # --- 代理透传与自动转换 ---
+    proxy_vars = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", 
+                  "http_proxy", "https_proxy", "all_proxy", "no_proxy"]
+    
+    docker_cmd.extend(["--add-host", "host.docker.internal:host-gateway"])
+
+    for var in proxy_vars:
+        val = os.getenv(var)
+        if val:
+            val = val.replace("127.0.0.1", "host.docker.internal").replace("localhost", "host.docker.internal")
+            docker_cmd.extend(["-e", f"{var}={val}"])
+    
+    # 镜像选择
+    image = "python:3.10-slim"
+    if runtime == "node":
+        image = "node:18-slim"
+    
+    docker_cmd.append(image)
+
+    # --- 构造容器内执行指令 (支持自动安装依赖) ---
+    if runtime == "python":
+        # 检查是否有 requirements.txt
+        inner_cmd = f"python {main_script} '{args_json}'"
+        if os.path.exists(os.path.join(skill_path, "requirements.txt")):
+            logger.info(f"检测到 {skill_name} 依赖，正在沙箱中安装...")
+            inner_cmd = f"pip install --no-cache-dir -r requirements.txt && {inner_cmd}"
+        
+        docker_cmd.extend(["sh", "-c", inner_cmd])
+    else:
+        # 其他 runtime (如 node)
+        docker_cmd.extend([runtime, main_script, args_json])
+
+    try:
+        logger.info(f"正在启动沙箱执行技能: {skill_name}")
+        result = subprocess.run(
+            docker_cmd,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return result.stdout
+    except subprocess.CalledProcessError as e:
+        return f"沙箱执行失败 (Exit {e.returncode}): {e.stderr or e.stdout}"
+
+def load_dynamic_skills():
+    """
+    扫描 app/skills 目录，加载所有技能的元数据，用于工具定义。
+    """
+    project_root = os.getcwd()
+    skills_dir = os.path.join(project_root, "app/skills")
+    tools = []
+    
+    if not os.path.exists(skills_dir):
+        logger.warning(f"技能目录不存在: {skills_dir}")
+        return tools
+
+    for skill_name in os.listdir(skills_dir):
+        skill_path = os.path.join(skills_dir, skill_name)
+        if not os.path.isdir(skill_path):
             continue
             
-        # 安装依赖
-        install_skill_dependencies(folder_path)
-
-        manifest_path = os.path.join(folder_path, "manifests", "skill.json")
-        if os.path.exists(manifest_path):
+        # 尝试多种路径查找 skill.json
+        manifest_candidates = [
+            os.path.join(skill_path, "manifests", "skill.json"),
+            os.path.join(skill_path, "skill.json")
+        ]
+        
+        manifest_path = None
+        for candidate in manifest_candidates:
+            if os.path.exists(candidate):
+                manifest_path = candidate
+                break
+        
+        if manifest_path:
             try:
                 with open(manifest_path, "r", encoding="utf-8") as f:
                     manifest = json.load(f)
                 
-                # 构建符合 OpenAI/LiteLLM 标准的工具定义
+                # 转换为 OpenAI 工具格式
                 tool_def = {
                     "type": "function",
                     "function": {
-                        "name": manifest["name"],
-                        "description": f"[Tier 2 Skill] {manifest['description']}",
+                        "name": manifest.get("name", skill_name),
+                        "description": f"[Tier 2] {manifest.get('description', '')}",
                         "parameters": manifest.get("parameters", {
                             "type": "object",
                             "properties": {},
@@ -54,68 +163,12 @@ def load_modular_skills() -> List[Dict[str, Any]]:
                         })
                     }
                 }
-                tool_definitions.append(tool_def)
+                tools.append(tool_def)
+                logger.info(f"成功加载技能定义: {skill_name}")
             except Exception as e:
-                print(f"警告: 加载技能 {folder} 失败: {str(e)}")
+                logger.error(f"加载技能 {skill_name} 定义失败: {str(e)}")
                 
-    return tool_definitions
+    return tools
 
-def execute_skill_module(skill_name: str, **kwargs) -> str:
-    """
-    执行模块化技能。根据 skill.json 声明的 runtime 和 entry 执行对应脚本。
-    """
-    skill_folder = os.path.join(SKILLS_DIR, skill_name)
-    manifest_path = os.path.join(skill_folder, "manifests", "skill.json")
-    
-    if not os.path.exists(manifest_path):
-        return f"错误: 未找到技能 {skill_name} 的声明文件。"
-
-    try:
-        # 1. 读取声明以获取运行配置
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            manifest = json.load(f)
-        
-        # 优先使用 main (类似 package.json)，兼容 entry 和默认值
-        runtime = manifest.get("runtime", "python")
-        entry_point = manifest.get("main") or manifest.get("entry", "src/executor.py")
-        full_entry_path = os.path.join(skill_folder, entry_point)
-
-        if not os.path.exists(full_entry_path):
-            return f"错误: 技能 {skill_name} 缺少入口文件 {entry_point}"
-
-        # 2. 准备执行命令
-        args_json = json.dumps(kwargs)
-        if runtime == "python":
-            cmd = [sys.executable, full_entry_path, args_json]
-        elif runtime == "node":
-            cmd = ["node", full_entry_path, args_json]
-        elif runtime == "shell" or runtime == "bash":
-            cmd = ["bash", full_entry_path, args_json]
-        else:
-            return f"错误: 不支持的运行环境 {runtime}"
-
-        # 3. 执行并捕获结果
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
-        
-        if result.returncode == 0:
-            return result.stdout.strip()
-        else:
-            return f"技能执行失败 (Exit {result.returncode}): {result.stderr or result.stdout}"
-            
-    except Exception as e:
-        return f"执行异常: {str(e)}"
-
-# --- 动态生成工具集 ---
-# 这样我们就不用在 tools.py 里手动添加每个技能了
-DYNAMIC_SKILL_TOOLS = load_modular_skills()
-
-# 统一的执行映射
-def skill_executor_wrapper(**kwargs):
-    # 这个 wrapper 会被绑定到所有动态加载的技能名上
-    # 我们需要在调用时知道是哪个技能，稍微有点复杂，我们在 tools.py 处理
-    pass
+# 导出动态加载的技能工具列表
+DYNAMIC_SKILL_TOOLS = load_dynamic_skills()

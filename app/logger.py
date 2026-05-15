@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 
 # 确保日志目录存在
-LOG_DIR = "/app/logs"
+LOG_DIR = "logs"
 if not os.path.exists(LOG_DIR):
     os.makedirs(LOG_DIR, exist_ok=True)
 
