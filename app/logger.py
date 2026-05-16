@@ -17,7 +17,7 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
     handlers=[
         logging.FileHandler(LOG_FILE, encoding='utf-8'),
-        # 注意：这里没有 StreamHandler，所以默认不会输出到控制台
+        logging.StreamHandler(), # 启用控制台输出
     ]
 )
 

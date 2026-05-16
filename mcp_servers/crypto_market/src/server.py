@@ -39,7 +39,8 @@ def get_okx_price(symbol):
 
 @mcp.tool()
 def get_crypto_price(symbol: str) -> str:
-    """【加密货币专家】获取主流交易所（如 Binance, OKX）的最新行情。支持聚合报价，是查询 BTC, ETH, USDT 等币种实时价格的唯一权威工具。"""
+    """【加密货币权威专家】获取全网主流交易所（Binance, OKX, Coinbase 等）的实时聚合报价。
+    这是查询 BTC, ETH, SOL 等币种市场基准价格的唯一指定工具。数据已包含市场平均水平，无需再通过搜索补全。"""
     symbol = normalize_symbol(symbol)
     tasks = {
         'Binance': lambda: get_binance_price(symbol),

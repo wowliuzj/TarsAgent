@@ -144,3 +144,8 @@
 2026-05-16 13:46:01,468 [INFO] LiteLLM: Wrapper: Completed Call, calling success_handler
 2026-05-16 13:46:21,970 [INFO] mcp.server.lowlevel.server: Processing request of type CallToolRequest
 2026-05-16 13:46:22,873 [INFO] LiteLLM: Wrapper: Completed Call, calling success_handler
+2026-05-16 17:00:12,550 [INFO] mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-05-16 17:00:12,553 [INFO] mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-05-16 17:05:40,711 [INFO] mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-05-16 17:05:40,715 [INFO] mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-05-16 17:06:40,147 [INFO] mcp.server.lowlevel.server: Processing request of type CallToolRequest

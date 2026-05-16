@@ -2,18 +2,29 @@
 
 Tars Agent 是一个基于 Python 构建的高性能、工业级 AI 智能体。它全面采用了 Anthropic 的 **Model Context Protocol (MCP)** 标准，实现了高度解耦、物理隔离且具备自进化能力的插件化架构。
 
-## 🏗 核心架构：MCP (Model Context Protocol)
+## 🏗️ 2.0 架构 (LangGraph + MCP)
 
-Tars 2.0 的所有能力均作为标准的 MCP Server 运行，具备“即插即用”的特性。
+Tars 2.0 采用了 **THP (Tars Harness Protocol)** 协议，通过 **LangGraph** 驱动任务流转：
 
-### 1. 目录结构
+```mermaid
+graph LR
+    User([用户输入]) --> PM{Planner/PM}
+    PM --> Ex[Executor]
+    Ex --> Au{Auditor}
+    Au -- 驳回 --> Ex
+    Au -- 通过 --> Ref[Reflect/Save]
+    Ref --> User
+```
+
+- **LangGraph**: 核心逻辑骨架，负责状态流转与节点调度。
+- **MCP (Model Context Protocol)**: 工具层的统一协议，支持 Docker 沙箱化运行。
+- **LiteLLM**: 多模型适配层，支持 OpenAI, Claude, Gemini, DeepSeek 等主流 LLM。
 - **`/app/mcp`**: 核心调度中心 (`client_manager.py`)，负责 Server 发现与 JSON-RPC 通信。
 - **`/mcp_servers`**: 技能插槽目录。每个子文件夹都是一个独立的 MCP 服务。
     - **`system_runtime`**: 提供文件读写、终端、记忆等核心能力 (Native 运行)。
     - **`crypto_market`**: 提供实时行情聚合 (Docker 沙箱运行)。
     - **`web_search`**: 提供联网搜索能力 (Docker 沙箱运行)。
 
-### 2. 三大核心特性
 - **懒加载 (Lazy Loading)**: 启动时仅扫描元数据。只有当你明确调用某个工具时，Tars 才会启动对应的 Docker 容器或进程，实现“零延迟启动”。
 - **物理隔离沙盒**: 第三方扩展默认运行在 Docker 容器中，确保你的宿主机环境安全。
 - **环境自愈与持久化**: 容器内自动安装依赖，并利用 Docker Volume 持久化 Python 环境，避免重复安装。

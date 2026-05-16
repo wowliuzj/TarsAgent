@@ -159,6 +159,14 @@ class MCPClientManager:
             return f"工具执行异常: {str(e)}"
 
     async def stop(self):
-        await self.exit_stack.aclose()
-        self.sessions.clear()
+        """安全关闭所有 MCP 连接"""
+        logger.info("正在关闭所有 MCP 服务...")
+        try:
+            # 1. 先清空会话映射
+            self.sessions.clear()
+            # 2. 释放 ExitStack 中的所有资源 (包括 stdio_client 和任务组)
+            await self.exit_stack.aclose()
+        except Exception as e:
+            logger.debug(f"MCP 关闭期间捕获到预期内的异步清理异常: {e}")
+        
         logger.info("所有 MCP 服务已安全关闭。")
