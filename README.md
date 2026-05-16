@@ -1,73 +1,42 @@
-# Tars Agent
+# Tars Agent 2.0 (MCP Edition)
 
-Tars Agent 是一个基于 Python 构建的高性能模块化 AI 智能体。它采用分层架构（Tiered Capability），具备强大的逻辑推理能力、动态扩展的技能库以及基于向量数据库的长期记忆系统。
+Tars Agent 是一个基于 Python 构建的高性能、工业级 AI 智能体。它全面采用了 Anthropic 的 **Model Context Protocol (MCP)** 标准，实现了高度解耦、物理隔离且具备自进化能力的插件化架构。
 
-## 🌟 核心特性
+## 🏗 核心架构：MCP (Model Context Protocol)
 
-- **分层能力架构 (Tiered Capability)**:
-    - **Tier 1 (基础工具)**: 稳定、高速的系统级工具（文件读写、终端执行、记忆检索）。
-    - **Tier 2 (动态技能)**: 模块化、可插拔的技能扩展。支持独立的 `skill.json` 定义和环境隔离。
-- **主动记忆闭环 (The Memory Loop)**: 
-    - **静默检索 (RAG)**: 每轮对话前自动检索历史相关知识。
-    - **自主反思 (Reflection)**: 任务完成后自动提取并保存关键事实到长期记忆库。
-- **专业级联网能力**: 集成 Tavily AI Search，提供具备智能摘要和来源引用的专业搜索结果。
-- **多模型混合架构 (Hybrid Architecture)**: 
-    - **高度灵活**: 通过 LiteLLM 适配层，支持 OpenAI, Google, Claude, DeepSeek 等多种主流 LLM 模型。
-    - **配置驱动**: 系统根据 `.env` 配置自动切换主推理模型与向量模型，实现推理与检索能力的动态平衡。
-    - **核心约束**: 向量模型（Embedding）与向量数据库强绑定。如需更换向量模型，必须对现有向量数据库进行全量迁移/重索引。
-- **动态安全防护**: 
-    - 支持项目根目录全局访问，Agent 可自主阅读 `SKILLS_GUIDE.md` 等文档进行技能学习。
-    - 内置 **敏感文件黑名单**，自动屏蔽 `.env`、`.git` 等核心隐私文件。
-- **物理隔离沙盒**: 针对联网和高风险技能，支持 Docker 容器级物理隔离运行。
+Tars 2.0 的所有能力均作为标准的 MCP Server 运行，具备“即插即用”的特性。
+
+### 1. 目录结构
+- **`/app/mcp`**: 核心调度中心 (`client_manager.py`)，负责 Server 发现与 JSON-RPC 通信。
+- **`/mcp_servers`**: 技能插槽目录。每个子文件夹都是一个独立的 MCP 服务。
+    - **`system_runtime`**: 提供文件读写、终端、记忆等核心能力 (Native 运行)。
+    - **`crypto_market`**: 提供实时行情聚合 (Docker 沙箱运行)。
+    - **`web_search`**: 提供联网搜索能力 (Docker 沙箱运行)。
+
+### 2. 三大核心特性
+- **懒加载 (Lazy Loading)**: 启动时仅扫描元数据。只有当你明确调用某个工具时，Tars 才会启动对应的 Docker 容器或进程，实现“零延迟启动”。
+- **物理隔离沙盒**: 第三方扩展默认运行在 Docker 容器中，确保你的宿主机环境安全。
+- **环境自愈与持久化**: 容器内自动安装依赖，并利用 Docker Volume 持久化 Python 环境，避免重复安装。
 
 ## 🚀 快速开始
 
 ### 1. 环境准备
-确保已安装：
 - Docker & Docker Compose
-- Python 3.10+ (推荐使用 venv)
+- Python 3.10+
 
-### 2. 配置环境变量
-复制 `env_example` 并重命名为 `.env`。**根据你选择的模型提供商配置对应的 API Key：**
-```env
-# 主推理模型 (示例使用 OpenAI)
-OPENAI_API_KEY=your_openai_key
-MODEL_NAME=openai/gpt-4o
-
-# 向量模型 (示例使用 Google，更换模型需重索引数据库)
-GOOGLE_API_KEY=your_google_key
-EMBEDDING_MODEL=gemini/gemini-embedding-2
-```
-
-### 3. 启动基础设施
-```bash
-docker-compose up -d db
-```
-
-### 4. 运行交互式 Agent
-```bash
-# 创建虚拟环境
-python3 -m venv venv
-source venv/bin/activate
-# 安装依赖
-pip install -r requirements.txt
-# 运行
-./tars
-```
-
-## 📂 项目结构
-- `app/`: 核心逻辑。
-    - `agent.py`: ReAct 循环与反思逻辑。
-    - `skills.py`: 动态技能加载引擎。
-    - `tools.py`: 基础工具集（Tier 1）。
-- `app/skills/`: 动态技能存放地（Tier 2）。
-- `data/`: Agent 的工作空间，受路径安全机制保护。
-- `logs/`: 自动切分的运行日志。
+### 2. 配置与启动
+1. 复制 `env_example` 并配置 `.env`（需包含 `OPENAI_API_KEY` 和 `TAVILY_API_KEY` 等）。
+2. 启动数据库：`docker-compose up -d db`。
+3. 运行 Tars：
+   ```bash
+   pip install -r requirements.txt
+   ./tars
+   ```
 
 ## 📖 相关文档
-- [WALKTHROUGH.md](./walkthrough.md): 最近一次架构升级与修复记录。
-- [SOUL.md](./SOUL.md): Agent 的核心准则、价值观与性格定义。
-- [TODO.md](./TODO.md): 待办功能与技术规划。
+- [WALKTHROUGH.md](./walkthrough.md): 记录了从 Legacy 到 MCP 的详细演变。
+- [MCP_GUIDE.md](./MCP_GUIDE.md): 开发者指南，教你如何为 Tars 编写新的 MCP Server。
+- [CHANGELOG.md](./CHANGELOG.md): 版本变更历史。
 
 ---
 *Stay Human. Stay Tars.*

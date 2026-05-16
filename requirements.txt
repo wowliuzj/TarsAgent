@@ -11,4 +11,4 @@ tavily-python
 requests
 pandas
 openpyxl
-httpx[socks]
+httpx[socks]mcp>=1.0.0

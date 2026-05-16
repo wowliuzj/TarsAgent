@@ -1,9 +1,11 @@
 # Tars Agent 待办事项与技术注意事项
 
 ## 🚀 待办功能 (Features)
-- [x] **长期记忆增强**: 已实现基于 PGVector 的长期记忆库，支持静默检索与自主反思存入。
-- [ ] **向量迁移脚本**: 当 `EMBEDDING_MODEL` 变更时，自动读取旧数据并使用新模型重新生成向量。
-- [ ] **技能自我安装**: 实现 `install_skill` 核心工具。
+- [x] **长期记忆增强**: 已实现基于 PGVector 的长期记忆库。
+- [x] **MCP 标准化**: 全面迁移至 Anthropic MCP 总线架构，支持插件式扩展。
+- [x] **异步驱动引擎**: 核心循环已升级为 `asyncio`。
+- [ ] **向量迁移脚本**: 当 `EMBEDDING_MODEL` 变更时，自动重索引。
+- [ ] **MCP 生态扩展**: 集成更多外部 MCP Servers (GitHub, Slack, etc.)。
 - [x] **RAG 引用标注**: 已在搜索结果中包含内容摘要。
 
 ## ⚠️ 关键注意事项 (Gotchas)

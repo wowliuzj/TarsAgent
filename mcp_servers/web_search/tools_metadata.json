@@ -1,0 +1,24 @@
+[
+  {
+    "name": "tavily_search",
+    "description": "【通用搜索/最后手段】仅当没有其他专门工具（如加密货币工具、文件工具）可以处理请求时，才使用此工具。",
+    "parameters": {
+      "properties": {
+        "query": {
+          "title": "Query",
+          "type": "string"
+        },
+        "max_results": {
+          "default": 5,
+          "title": "Max Results",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "tavily_searchArguments",
+      "type": "object"
+    }
+  }
+]

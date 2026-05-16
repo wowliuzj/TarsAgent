@@ -1,0 +1,10 @@
+{
+  "name": "web_search",
+  "version": "1.0.0",
+  "description": "基于 Tavily AI 的专业联网搜索工具。",
+  "runtime": {
+    "type": "docker",
+    "image": "python:3.10-slim"
+  },
+  "entrypoint": "python src/server.py"
+}

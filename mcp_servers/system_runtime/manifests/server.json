@@ -1,0 +1,9 @@
+{
+  "name": "system_runtime",
+  "version": "1.0.0",
+  "description": "Tars Agent 核心系统工具集，包含文件操作、终端执行与记忆管理。",
+  "runtime": {
+    "type": "native"
+  },
+  "entrypoint": "python src/server.py"
+}

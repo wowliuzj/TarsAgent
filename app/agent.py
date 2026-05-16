@@ -1,9 +1,10 @@
 import os
 import json
-from typing import List, Dict, Any
-from litellm import completion
+import asyncio
+from typing import List, Dict, Any, Optional
+from litellm import acompletion # 使用异步版本
 from app.db import engine, TarsMessage, TarsSession
-from app.tools import TOOLS, TOOL_MAP, memory_search, memory_save
+from app.mcp.client_manager import MCPClientManager
 from app.prompts import BASE_SYSTEM_PROMPT, MEMORY_CONTEXT_PROMPT, REFLECTION_PROMPT
 from sqlmodel import Session, select
 from rich.console import Console
@@ -16,7 +17,15 @@ class TarsAgent:
         self.session_id = session_id
         self.model = os.getenv("MODEL_NAME")
         if not self.model:
-            raise ValueError("错误: 未在环境变量中找到 MODEL_NAME。请检查 .env 文件并确保其包含提供商前缀 (如 openai/gpt-4o)。")
+            raise ValueError("错误: 未在环境变量中找到 MODEL_NAME。")
+        self.mcp_manager = MCPClientManager()
+        self._mcp_initialized = False
+
+    async def _init_mcp(self):
+        """初始化并启动所有 MCP Servers"""
+        if not self._mcp_initialized:
+            await self.mcp_manager.start()
+            self._mcp_initialized = True
 
     def _get_history(self) -> List[Dict[str, Any]]:
         """从数据库中检索当前会话的所有历史消息。"""
@@ -58,40 +67,47 @@ class TarsAgent:
             session.add(new_msg)
             session.commit()
 
-    def run(self, user_input: str) -> str:
-        """运行 ReAct 循环，包含 RAG 检索和自我反思"""
+    async def run(self, user_input: str) -> str:
+        """运行异步 ReAct 循环，包含 MCP 调度、RAG 检索和自我反思"""
         
-        # 1. 保存用户输入
+        # 1. 初始化 MCP
+        await self._init_mcp()
+        
+        # 2. 保存用户输入
         self._save_message("user", user_input)
         
-        # 2. 静默记忆检索 (RAG)
-        # 即使这里失败，也不影响主流程
+        # 3. 静默记忆检索 (RAG) - 通过 MCP 调用 system_runtime
+        memory_data = ""
         try:
-            memory_data = memory_search(user_input, top_k=2)
+            memory_data = await self.mcp_manager.call_tool("memory_search", {"query": user_input, "top_k": 2})
         except:
-            memory_data = ""
+            pass
 
         history = self._get_history()
         
         # 如果找回了相关记忆，将其注入到当前上下文
-        if "找回的相关记忆" in memory_data:
+        if memory_data and "找回的相关记忆" in memory_data:
             memory_prompt = MEMORY_CONTEXT_PROMPT.format(memory_content=memory_data)
             history.insert(1, {"role": "system", "content": memory_prompt})
 
-        # 3. 主 ReAct 循环
+        # 4. 主 ReAct 循环
         max_steps = int(os.getenv("MAX_STEPS", 20))
         step = 0
         final_answer = "未能在限步内完成任务。"
         
         while step < max_steps:
             step += 1
-            console.print(f"\n[bold cyan]>>> Step {step}[/bold cyan] | 正在调用模型: {self.model} ...")
+            console.print(f"\n[bold cyan]>>> Step {step}[/bold cyan] | 正在通过 MCP 调度工具 | 模型: {self.model} ...")
             
-            response = completion(
+            # 确保在没有任何工具时传入 None，防止 API 报错
+            tools = self.mcp_manager.all_tools if self.mcp_manager.all_tools else None
+            
+            # 使用异步 completion
+            response = await acompletion(
                 model=self.model,
                 messages=history,
-                tools=TOOLS,
-                tool_choice="auto"
+                tools=tools,
+                tool_choice="auto" if tools else None
             )
             
             message = response.choices[0].message
@@ -112,46 +128,44 @@ class TarsAgent:
                 function_name = tool_call.function.name
                 function_args = json.loads(tool_call.function.arguments)
                 
-                console.print(f"[*] [bold blue]执行工具:[/bold blue] [cyan]{function_name}[/cyan]({function_args})")
+                console.print(f"[*] [bold blue]MCP 调用:[/bold blue] [cyan]{function_name}[/cyan]({function_args})")
                 
-                tool_func = TOOL_MAP.get(function_name)
-                if tool_func:
-                    observation = tool_func(**function_args)
-                    console.print(f"[+] [bold green]观察结果:[/bold green] {observation}")
-                    
-                    history.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "name": function_name,
-                        "content": str(observation)
-                    })
-                    self._save_message("tool", str(observation), tool_call_id=tool_call.id)
-                else:
-                    history.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "name": function_name,
-                        "content": f"Error: Tool {function_name} not found."
-                    })
+                # 通过 MCP Manager 执行调用
+                observation = await self.mcp_manager.call_tool(function_name, function_args)
+                
+                console.print(f"[+] [bold green]观测结果:[/bold green] {observation}")
+                
+                history.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "name": function_name,
+                    "content": str(observation)
+                })
+                self._save_message("tool", str(observation), tool_call_id=tool_call.id)
 
-        # 4. 自我反思环节 (Reflection)
+        # 5. 自我反思环节 (Reflection)
         try:
             history.append({"role": "system", "content": REFLECTION_PROMPT})
-            ref_response = completion(
+            tools = self.mcp_manager.all_tools if self.mcp_manager.all_tools else None
+            ref_response = await acompletion(
                 model=self.model,
                 messages=history,
-                tools=TOOLS,
-                tool_choice="auto"
+                tools=tools,
+                tool_choice="auto" if tools else None
             )
             ref_msg = ref_response.choices[0].message
             if ref_msg.tool_calls:
                 for tc in ref_msg.tool_calls:
-                    if tc.function.name == "memory_save":
-                        args = json.loads(tc.function.arguments)
-                        memory_save(**args)
-                        console.print("[dim italic]Tars 已自动将重要信息存入长期记忆库。[/dim italic]")
-        except Exception as e:
-            # 反思环节失败不影响主任务结果，静默跳过
+                    # 统一通过 MCP call_tool 路由
+                    name = tc.function.name
+                    args = json.loads(tc.function.arguments)
+                    await self.mcp_manager.call_tool(name, args)
+                console.print("[dim italic]Tars 已通过 MCP 自动同步长期记忆。[/dim italic]")
+        except:
             pass
 
         return final_answer
+
+    async def shutdown(self):
+        """关闭所有 MCP 会话"""
+        await self.mcp_manager.stop()

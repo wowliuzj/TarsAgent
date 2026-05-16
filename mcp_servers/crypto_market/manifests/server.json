@@ -1,0 +1,10 @@
+{
+  "name": "crypto_market",
+  "version": "1.1.0",
+  "description": "加密货币行情数据中心，支持多交易所聚合报价。包括获取主流交易所加密货币价格可使用 get_crypto_price 工具。",
+  "runtime": {
+    "type": "docker",
+    "image": "python:3.10-slim"
+  },
+  "entrypoint": "python src/server.py"
+}
