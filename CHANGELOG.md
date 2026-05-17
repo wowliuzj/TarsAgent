@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.2.0] - 2026-05-17
+### 🤝 核心进化：Phase 2 多角色协作落地 (Multi-Agent)
+Tars 现已实现了内部的“三权分立”，具备了独立进行任务拆解与结果自我审计的能力。
+
+#### 核心升级
+- **Planner (规划者) 节点**: 作为图入口，负责解析用户意图并将其拆解为线性的执行计划 (`SubTask` 列表)。
+- **Executor (执行者) 演进**: 增加了专属的系统提示词约束，使其严格遵循 Planner 生成的计划按步骤执行。
+- **Auditor (审计员) 节点**: 在任务结束前拦截输出，负责验证任务的准确性、安全性和完整性。建立了完善的自我纠错闭环（支持驳回至 Executor 重试最多 3 次，或退回 Planner 重新规划）。
+- **状态层支持 (`TarsState`)**: 增加了多智能体控制流追踪字段 (`current_task_index`, `executor_retries`, `planner_retries`, `audit_feedback`)。
+
 ## [2.1.0] - 2026-05-16
 ### 🧠 核心重构：从 ReAct 循环迁移至 LangGraph 状态机
 Tars 的核心调度引擎已正式告别简单的 `while` 循环，升级为基于 **LangGraph** 的有向无环图 (DAG) 编排架构。这标志着 Tars 从单线程脚本进化为可扩展的多 Agent 系统。

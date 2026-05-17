@@ -50,3 +50,8 @@ class TarsState(TypedDict):
     
     # 下一节点 (用于逻辑路由)
     next_step: Optional[str]
+    
+    # Phase 2 控制流
+    current_task_index: int
+    executor_retries: int
+    planner_retries: int

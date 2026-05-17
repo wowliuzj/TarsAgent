@@ -17,10 +17,14 @@ THP 是 Tars 2.0 多智能体系统的通信与执行标准。它基于 **LangGr
 - `lane`: (Lane Enum) 任务泳道（如 EXECUTION, PLANNING, AUDIT）。
 - `audit_log`: (List[dict]) 审计痕迹。
 - `next_node`: (str) 状态机下一个跳转节点的建议。
+- `task_pool`: (List[SubTask]) 由 PM 拆解、Executor 领取的子任务池。
+- `shared_memory`: (Dict) 跨角色共享的临时变量池。
+- `current_task_index`: (int) 任务执行步进追踪器。
+- `executor_retries`: (int) 执行者由于审计驳回触发的重试计数。
+- `planner_retries`: (int) 规划者由于任务死锁触发的重构计数。
 
-### 预留字段 (Planned/Phase 2)：
-- `task_pool`: 跨角色领取的任务列表。
-- `shared_memory`: 临时缓存池。
+### 预留字段 (Planned/Phase 3)：
+- `tier_assignment`: (Dict) 针对不同节点路由的仿生算力分级配置。
 
 ---
 

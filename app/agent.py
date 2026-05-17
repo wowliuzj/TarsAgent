@@ -51,7 +51,10 @@ class TarsAgent:
             "task_pool": [],
             "audit_log": [],
             "current_lane": Lane.EXECUTION,
-            "next_step": None
+            "next_step": None,
+            "current_task_index": 0,
+            "executor_retries": 0,
+            "planner_retries": 0
         }
 
         logger.info(f"🚀 启动任务泳道: {initial_state['current_lane']}")
