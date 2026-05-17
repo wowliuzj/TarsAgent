@@ -25,5 +25,7 @@ DATABASE_URL=postgresql://user:pass@localhost:5432/dbname
 
 # --- Agent 行为配置 ---
 MAX_STEPS=50
+MAX_EXECUTOR_RETRIES=3
+MAX_PLANNER_RETRIES=2
 WORKSPACE_DIR=data
 ALL_PROXY=http://127.0.0.1:7890

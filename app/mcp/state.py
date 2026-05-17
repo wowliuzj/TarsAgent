@@ -55,3 +55,4 @@ class TarsState(TypedDict):
     current_task_index: int
     executor_retries: int
     planner_retries: int
+    audit_feedback: str

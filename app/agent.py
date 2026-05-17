@@ -54,7 +54,8 @@ class TarsAgent:
             "next_step": None,
             "current_task_index": 0,
             "executor_retries": 0,
-            "planner_retries": 0
+            "planner_retries": 0,
+            "audit_feedback": ""
         }
 
         logger.info(f"🚀 启动任务泳道: {initial_state['current_lane']}")
@@ -71,7 +72,7 @@ class TarsAgent:
         
         return final_response
 
-    async def _call_model(self, messages: List[BaseMessage]) -> AIMessage:
+    async def _call_model(self, messages: List[BaseMessage], use_tools: bool = True) -> AIMessage:
         """适配 LiteLLM 调用并返回 AIMessage"""
         llm_messages = []
         for m in messages:
@@ -106,11 +107,12 @@ class TarsAgent:
             llm_messages.append(msg_dict)
 
         # 调用 LiteLLM
+        tools = self.mcp_manager.all_tools if (self.mcp_manager.all_tools and use_tools) else None
         response = await asyncio.to_thread(
             completion,
             model=self.model,
             messages=llm_messages,
-            tools=self.mcp_manager.all_tools if self.mcp_manager.all_tools else None
+            tools=tools
         )
 
         resp_msg = response.choices[0].message

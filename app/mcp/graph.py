@@ -1,3 +1,4 @@
+import os
 import json
 from typing import Dict, List, Any, Union
 from langgraph.graph import StateGraph, START, END
@@ -68,7 +69,7 @@ class TarsGraphBuilder:
             logger.warning("Planner 正在根据 Auditor 意见重新规划...")
             messages.append(SystemMessage(content=f"前次计划执行失败，审计意见：{state['audit_feedback']}。请重新规划。"))
             
-        response = await self.agent._call_model(messages)
+        response = await self.agent._call_model(messages, use_tools=False)
         plan_text = response.content
         logger.info(f"[*] Planner 制定的计划:\n{plan_text}")
         
@@ -140,7 +141,7 @@ class TarsGraphBuilder:
             HumanMessage(content=audit_content)
         ]
         
-        response = await self.agent._call_model(messages)
+        response = await self.agent._call_model(messages, use_tools=False)
         verdict = response.content.strip().lower()
         
         is_approved = verdict.startswith("approved")
@@ -170,14 +171,17 @@ class TarsGraphBuilder:
         if not state.get("audit_feedback"):
             return "reflect" # 审计通过
             
+        max_executor_retries = int(os.getenv("MAX_EXECUTOR_RETRIES", "3"))
+        max_planner_retries = int(os.getenv("MAX_PLANNER_RETRIES", "2"))
+            
         executor_retries = state.get("executor_retries", 0)
-        if executor_retries < 3:
-            logger.info(f"🔄 审计未通过，退回 Executor (已重试 {executor_retries}/3 次)")
+        if executor_retries < max_executor_retries:
+            logger.info(f"🔄 审计未通过，退回 Executor (已重试 {executor_retries}/{max_executor_retries} 次)")
             return "think"
             
         planner_retries = state.get("planner_retries", 0)
-        if planner_retries < 2:
-            logger.warning(f"🔄 Executor 已达重试上限，退回 Planner 重新规划 (已重试 {planner_retries}/2 次)")
+        if planner_retries < max_planner_retries:
+            logger.warning(f"🔄 Executor 已达重试上限，退回 Planner 重新规划 (已重试 {planner_retries}/{max_planner_retries} 次)")
             return "planner"
             
         logger.error("🚨 任务彻底失败，已达所有重试上限。")
