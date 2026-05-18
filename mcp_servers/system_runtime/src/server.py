@@ -73,30 +73,13 @@ def list_files(directory: str = ".") -> str:
 
 @mcp.tool()
 def run_terminal_command(command: str) -> str:
-    """在 Tars 专用工作区目录下执行终端命令，避免污染项目根目录。"""
+    """在项目根目录下执行终端命令，支持读写各种代码与 data/ 或 tmp/ 目录下的文件。"""
     try:
-        import shutil
-        # 获取配置的工作区目录，默认为 "data"
-        workspace_env = os.getenv("WORKSPACE_DIR", "data")
-        workspace_path = os.path.abspath(os.path.join(PROJECT_ROOT, workspace_env, "workspace"))
+        # 确保 tmp/ 物理目录存在，以备存放临时脚本和计算碎片
+        tmp_path = os.path.join(PROJECT_ROOT, "tmp")
+        os.makedirs(tmp_path, exist_ok=True)
         
-        # 确保 data/workspace 物理文件夹存在
-        os.makedirs(workspace_path, exist_ok=True)
-        
-        # 确保关键文档指南在工作区目录下可见，便于 shell 命令或测试读取
-        for doc_name in ["MCP_GUIDE.md", "README.md", "TARS.md"]:
-            src = os.path.join(PROJECT_ROOT, doc_name)
-            dst = os.path.join(workspace_path, doc_name)
-            if os.path.exists(src) and not os.path.exists(dst):
-                try:
-                    os.symlink(src, dst)
-                except Exception:
-                    try:
-                        shutil.copy2(src, dst)
-                    except:
-                        pass
-        
-        result = subprocess.run(command, shell=True, cwd=workspace_path, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(command, shell=True, cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=60)
         return result.stdout if result.returncode == 0 else f"错误 (退出码 {result.returncode}): {result.stderr}"
     except Exception as e:
         return f"执行异常: {str(e)}"

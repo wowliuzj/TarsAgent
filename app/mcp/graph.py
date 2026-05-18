@@ -239,13 +239,13 @@ class TarsGraphBuilder:
                         "TODO.md", "Dockerfile", "docker-compose.yml",
                         "README.md", "CHANGELOG.md"
                     ]
-                    # 如果不是在允许的代码维护路径下，且不以 data/workspace/ 开头
+                    # 如果不是在允许的代码维护路径下，且不以 data/ 或 tmp/ 开头
                     is_coding_task = any(path_val.startswith(d) for d in allowed_coding_dirs) or path_val in allowed_coding_dirs
                     
-                    if not is_coding_task and not path_val.startswith("data/workspace/"):
+                    if not is_coding_task and not (path_val.startswith("data/") or path_val.startswith("tmp/")):
                         import os
                         filename = os.path.basename(path_val)
-                        new_path = f"data/workspace/{filename}"
+                        new_path = f"tmp/{filename}"
                         args["file_path"] = new_path
                         logger.warning(f"⚠️ [工作区拦截器] 拦截到违规路径 '{path_val}'，已自动安全重定向至安全工作区: '{new_path}'")
                         redirected_msg = f"【安全提醒：由于路径合规规范限制，文件已自动安全重定向保存至 '{new_path}'。请你在此后的执行与陈述中均采用此重定向后的新路径。】\n"
@@ -254,16 +254,29 @@ class TarsGraphBuilder:
                 elif tool_name == "list_files" and "directory" in args:
                     dir_val = args["directory"]
                     allowed_coding_dirs = [
-                        "app", "mcp_servers", "docs", "data/workspace"
+                        "app", "mcp_servers", "docs", "data", "tmp"
                     ]
-                    is_coding_task = any(dir_val.startswith(d) for d in allowed_coding_dirs) or dir_val in allowed_coding_dirs or dir_val == "."
+                    is_coding_task = any(dir_val.startswith(d) for d in allowed_coding_dirs) or dir_val in allowed_coding_dirs or dir_val == "." or dir_val.startswith("data/") or dir_val.startswith("tmp/")
                     if not is_coding_task:
-                        args["directory"] = "data/workspace"
-                        logger.warning(f"⚠️ [工作区拦截器] 拦截到违规目录列表请求 '{dir_val}'，已自动重定向至安全工作区: 'data/workspace'")
-                        redirected_msg = "【安全提醒：由于路径合规规范限制，目录已自动重定向定位至 'data/workspace'。】\n"
+                        args["directory"] = "tmp"
+                        logger.warning(f"⚠️ [工作区拦截器] 拦截到违规目录列表请求 '{dir_val}'，已自动重定向至安全工作区: 'tmp'")
+                        redirected_msg = "【安全提醒：由于路径合规规范限制，目录已自动重定向定位至 'tmp'。】\n"
 
                 # 调用 MCP Manager
                 result = await self.agent.mcp_manager.call_tool(tool_name, args)
+                
+                # 3. 增加大模型上下文截断保护哨兵 (Tool Output Truncation Safeguard)
+                # 保护阈值设为 50000 字符（约合 1.25 万 Tokens 左右），确保绝不撑爆上下文视界
+                MAX_TOOL_OUTPUT_CHARS = 50000
+                if isinstance(result, str) and len(result) > MAX_TOOL_OUTPUT_CHARS:
+                    original_len = len(result)
+                    truncated_content = result[:MAX_TOOL_OUTPUT_CHARS]
+                    result = (
+                        f"【⚠️系统安全卫兵提醒：该工具返回的内容体积巨大（共 {original_len} 字符），已自动为您安全截断前 {MAX_TOOL_OUTPUT_CHARS} 字符以防大模型脑溢血崩溃。磁盘中的物理文件依然是完整未受损的。】\n\n"
+                        f"{truncated_content}\n\n"
+                        f"【...剩余 {original_len - MAX_TOOL_OUTPUT_CHARS} 字符已被系统安全自动截断...】"
+                    )
+                    logger.warning(f"🛡️ [截断保护哨兵] 成功拦截并截断了工具 '{tool_name}' 的巨量输出（从 {original_len} 字符截断至 {MAX_TOOL_OUTPUT_CHARS}）")
                 
                 if redirected_msg:
                     result = redirected_msg + result
