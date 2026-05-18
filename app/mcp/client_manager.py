@@ -82,6 +82,116 @@ class MCPClientManager:
                 "function": tool
             })
 
+        # 同步工具索引到数据库中以便进行 RAG 检索
+        try:
+            from sqlmodel import Session, select
+            from app.db import engine, MCPToolIndex
+            from litellm import embedding
+            from datetime import datetime
+            
+            with Session(engine) as db_sess:
+                # 获取数据库中该 server 现有的所有工具
+                statement = select(MCPToolIndex).where(MCPToolIndex.server_name == server_name)
+                db_tools = db_sess.exec(statement).all()
+                db_tool_map = {t.tool_name: t for t in db_tools}
+                
+                for t in tools:
+                    t_name = t["name"]
+                    t_desc = t["description"] or ""
+                    text_to_embed = f"Tool Name: {t_name}\nDescription: {t_desc}"
+                    
+                    # 如果工具在数据库中不存在，或者描述有改变，就计算 Embedding 并写入/更新
+                    if t_name not in db_tool_map or db_tool_map[t_name].description != t_desc:
+                        logger.info(f"正在为工具 {server_name}.{t_name} 计算语义向量并同步到 DB...")
+                        model = os.getenv("EMBEDDING_MODEL")
+                        response = embedding(model=model, input=[text_to_embed])
+                        vec = response.data[0]['embedding']
+                        
+                        if t_name in db_tool_map:
+                            db_tool = db_tool_map[t_name]
+                            db_tool.description = t_desc
+                            db_tool.embedding = vec
+                            db_tool.tool_schema = t
+                            db_tool.updated_at = datetime.utcnow()
+                            db_sess.add(db_tool)
+                        else:
+                            new_tool = MCPToolIndex(
+                                server_name=server_name,
+                                tool_name=t_name,
+                                description=t_desc,
+                                embedding=vec,
+                                tool_schema=t
+                            )
+                            db_sess.add(new_tool)
+                
+                db_sess.commit()
+        except Exception as e:
+            logger.error(f"同步 MCP Server {server_name} 工具元数据到数据库失败: {str(e)}")
+
+    async def get_tools_for_query(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
+        """
+        根据用户查询 Query，采用 Tool RAG 动态筛选并召回工具。
+        - 核心基础设施工具 (system_runtime, web_search) 默认 100% 注入。
+        - 领域特种工具 (如 crypto_market) 通过 pgvector 检索 Top-K 相关度注入。
+        """
+        core_servers = {"system_runtime", "web_search"}
+        
+        try:
+            from sqlmodel import Session, select
+            from app.db import engine, MCPToolIndex
+            from litellm import embedding
+            
+            core_tools = []
+            special_tools = []
+            
+            with Session(engine) as db_sess:
+                # 1. 核心工具直接查询并加载
+                core_stmt = select(MCPToolIndex).where(MCPToolIndex.server_name.in_(core_servers))
+                db_core_tools = db_sess.exec(core_stmt).all()
+                for ct in db_core_tools:
+                    core_tools.append({
+                        "type": "function",
+                        "function": ct.tool_schema
+                    })
+                
+                # 2. 对非核心领域的特种工具，计算用户 Query 的 Embedding 并执行向量搜索检索
+                non_core_count_stmt = select(MCPToolIndex).where(
+                    ~MCPToolIndex.server_name.in_(core_servers)
+                )
+                non_core_tools_exist = db_sess.exec(non_core_count_stmt).first()
+                
+                if non_core_tools_exist:
+                    logger.info(f"正在为 Query '{query[:30]}...' 执行 Tool RAG 检索...")
+                    model = os.getenv("EMBEDDING_MODEL")
+                    response = await asyncio.to_thread(
+                        embedding,
+                        model=model,
+                        input=[query]
+                    )
+                    query_vec = response.data[0]['embedding']
+                    
+                    # 根据 L2 距离召回非核心特种工具
+                    rag_stmt = select(MCPToolIndex).where(
+                        ~MCPToolIndex.server_name.in_(core_servers)
+                    ).order_by(
+                        MCPToolIndex.embedding.l2_distance(query_vec)
+                    ).limit(top_k)
+                    
+                    db_special_tools = db_sess.exec(rag_stmt).all()
+                    for st in db_special_tools:
+                        logger.info(f"Tool RAG 命中特种工具: {st.server_name}.{st.tool_name}")
+                        special_tools.append({
+                            "type": "function",
+                            "function": st.tool_schema
+                        })
+            
+            logger.info(f"Tool RAG 组装完成: 核心工具 {len(core_tools)} 个, 特种工具 {len(special_tools)} 个")
+            return core_tools + special_tools
+            
+        except Exception as e:
+            logger.error(f"执行 Tool RAG 检索失败: {str(e)}")
+            return self.all_tools
+
     async def _connect_server(self, server_name: str):
         """物理启动 MCP Server 进程/容器"""
         if server_name in self.sessions:
@@ -126,7 +236,7 @@ class MCPClientManager:
                 with open(os.path.join(server_path, "requirements.txt"), "r") as f:
                     reqs = [l.strip() for l in f if l.strip() and not l.startswith("#")]
                 check_script = "; ".join([f"import {r.split('==')[0].split('>=')[0].replace('-', '_')}" for r in reqs])
-                inner_cmd = f"python3 -c '{check_script}' 2>/dev/null || (pip install --no-cache-dir -r requirements.txt > /dev/stderr) && {entrypoint}"
+                inner_cmd = f"python3 -c '{check_script}' 2>/dev/null || (pip install -q --no-cache-dir -r requirements.txt > /dev/null 2>&1) && {entrypoint}"
             
             docker_args.append(image)
             docker_args.extend(["sh", "-c", inner_cmd])

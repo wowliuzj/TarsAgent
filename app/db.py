@@ -1,6 +1,11 @@
 import os
 from datetime import datetime
 from typing import List, Optional, Dict, Any
+from dotenv import load_dotenv
+
+# 确保在初始化数据库结构前加载 .env 配置文件
+load_dotenv()
+
 from sqlmodel import SQLModel, Field, Session, create_engine, select, Relationship, Column, JSON
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import text
@@ -65,6 +70,20 @@ class KnowledgeBase(SQLModel, table=True):
     embedding: Any = Field(sa_column=Column(Vector(EMBEDDING_DIM))) 
     # 元数据字段，改名为 kb_metadata 以避开 SQLModel 内置属性
     kb_metadata: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+
+class MCPToolIndex(SQLModel, table=True):
+    """
+    MCP 工具语义索引表，用于 Tool RAG 动态召回。
+    """
+    __tablename__ = "mcp_tool_index"
+    
+    id: Optional[int] = Field(default=None, primary_key=True)
+    server_name: str = Field(index=True)
+    tool_name: str = Field(index=True)
+    description: str
+    embedding: Any = Field(sa_column=Column(Vector(EMBEDDING_DIM)))
+    tool_schema: Dict[str, Any] = Field(sa_column=Column(JSON))
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 def init_db():
     """

@@ -11,7 +11,7 @@ from app.mcp.state import TarsState, Mission, Lane
 from app.mcp.graph import TarsGraphBuilder
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 from litellm import completion
-from app.prompts import BASE_SYSTEM_PROMPT
+from app.prompts import BASE_SYSTEM_PROMPT, get_dynamic_project_context
 
 class TarsAgent:
     def __init__(self, session_id: int):
@@ -37,6 +37,9 @@ class TarsAgent:
         """执行 Tars 2.0 任务流"""
         await self._init_mcp()
         
+        # 获取动态项目上下文
+        dynamic_context = get_dynamic_project_context()
+        
         # 1. 构造初始状态 (THP 规范)
         initial_state: TarsState = {
             "mission": Mission(
@@ -44,7 +47,7 @@ class TarsAgent:
                 goal=user_input
             ),
             "history": [
-                SystemMessage(content=BASE_SYSTEM_PROMPT),
+                SystemMessage(content=BASE_SYSTEM_PROMPT + dynamic_context),
                 HumanMessage(content=user_input)
             ],
             "shared_memory": {},

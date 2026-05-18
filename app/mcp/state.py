@@ -21,6 +21,7 @@ class SubTask(BaseModel):
     description: str
     status: str = "pending" # pending, in_progress, completed, failed
     result: Optional[str] = None
+    precision_level: str = "L3"
 
 class AuditEntry(BaseModel):
     node_name: str

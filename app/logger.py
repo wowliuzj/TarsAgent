@@ -24,7 +24,9 @@ logging.basicConfig(
 # 显式禁止某些极其啰嗦的库输出到控制台
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("litellm").setLevel(logging.WARNING)
+logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("mcp.server.lowlevel.server").setLevel(logging.WARNING)
 
 # 针对 LiteLLM 的特殊静默设置
 try:

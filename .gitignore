@@ -20,3 +20,8 @@ list_models.py
 .DS_Store
 Thumbs.db
 /logs
+/output
+/outputs
+/summaries
+/checklists
+/mcp_servers/system_runtime/logs
