@@ -73,9 +73,16 @@ def list_files(directory: str = ".") -> str:
 
 @mcp.tool()
 def run_terminal_command(command: str) -> str:
-    """在项目根目录下执行终端命令。"""
+    """在 Tars 专用工作区目录下执行终端命令，避免污染项目根目录。"""
     try:
-        result = subprocess.run(command, shell=True, cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=60)
+        # 获取配置的工作区目录，默认为 "data"
+        workspace_env = os.getenv("WORKSPACE_DIR", "data")
+        workspace_path = os.path.abspath(os.path.join(PROJECT_ROOT, workspace_env, "workspace"))
+        
+        # 确保 data/workspace 物理文件夹存在
+        os.makedirs(workspace_path, exist_ok=True)
+        
+        result = subprocess.run(command, shell=True, cwd=workspace_path, capture_output=True, text=True, timeout=60)
         return result.stdout if result.returncode == 0 else f"错误 (退出码 {result.returncode}): {result.stderr}"
     except Exception as e:
         return f"执行异常: {str(e)}"
