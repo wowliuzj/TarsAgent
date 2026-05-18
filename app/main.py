@@ -90,6 +90,12 @@ def chat(
                     if user_input.lower() == "clear":
                         console.clear()
                         continue
+                    if user_input.lower() in ["sync", "update"]:
+                        console.print("[bold yellow]正在强制清空缓存并重新同步 Tool RAG 向量索引...[/bold yellow]")
+                        # 调用 mcp_manager 清空缓存并重构向量数据库
+                        await agent.mcp_manager.reload_and_resync()
+                        console.print("[bold green]✅ Tool RAG 向量索引与专属工具已强制同步刷新！[/bold green]")
+                        continue
                     if not user_input.strip():
                         continue
                     await run_chat_step(agent, user_input)

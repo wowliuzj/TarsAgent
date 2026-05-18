@@ -45,6 +45,26 @@ class MCPClientManager:
                 except Exception as e:
                     logger.error(f"发现 MCP Server {server_name} 失败: {str(e)}")
 
+        # 全局清理：删除那些在数据库中存在但整个 server 已经被卸载/禁用的工具
+        try:
+            from sqlmodel import Session, select
+            from app.db import engine, MCPToolIndex
+            active_servers = set(self.server_configs.keys())
+            # 确保基础设施服务器也包含在内，不被清理
+            active_servers.add("system_runtime")
+            active_servers.add("web_search")
+            
+            with Session(engine) as db_sess:
+                statement = select(MCPToolIndex)
+                all_db_tools = db_sess.exec(statement).all()
+                for db_tool in all_db_tools:
+                    if db_tool.server_name not in active_servers:
+                        logger.warning(f"检测到 MCP 服务 {db_tool.server_name} 已被卸载/禁用，正在从 DB 清理其所属工具 {db_tool.tool_name} 的向量索引...")
+                        db_sess.delete(db_tool)
+                db_sess.commit()
+        except Exception as e:
+            logger.error(f"清理已卸载 MCP 服务的数据库索引失败: {str(e)}")
+
     async def _discover_tools(self, server_name: str):
         """发现工具定义。优先使用缓存文件以避免启动容器。"""
         cfg = self.server_configs[server_name]
@@ -124,6 +144,13 @@ class MCPClientManager:
                             )
                             db_sess.add(new_tool)
                 
+                # 找出在数据库中存在，但本次发现已经不存在的已废弃工具，并从 DB 中删除
+                active_tool_names = {t["name"] for t in tools}
+                for t_name, db_tool in db_tool_map.items():
+                    if t_name not in active_tool_names:
+                        logger.warning(f"检测到工具 {server_name}.{t_name} 已被废弃，正在从 DB 向量索引中移除...")
+                        db_sess.delete(db_tool)
+                
                 db_sess.commit()
         except Exception as e:
             logger.error(f"同步 MCP Server {server_name} 工具元数据到数据库失败: {str(e)}")
@@ -191,6 +218,50 @@ class MCPClientManager:
         except Exception as e:
             logger.error(f"执行 Tool RAG 检索失败: {str(e)}")
             return self.all_tools
+
+    async def reload_and_resync(self):
+        """
+        强制清理所有本地的 tools_metadata.json 缓存，重新连接并重新计算/同步所有工具的向量索引。
+        """
+        # 1. 重新扫描服务目录配置
+        self.server_configs = {}
+        if os.path.exists(self.servers_dir):
+            for server_name in os.listdir(self.servers_dir):
+                server_path = os.path.join(self.servers_dir, server_name)
+                if not os.path.isdir(server_path): continue
+                
+                manifest_path = os.path.join(server_path, "manifests", "server.json")
+                if not os.path.exists(manifest_path):
+                    manifest_path = os.path.join(server_path, "server.json")
+                
+                if os.path.exists(manifest_path):
+                    try:
+                        with open(manifest_path, "r", encoding="utf-8") as f:
+                            manifest = json.load(f)
+                        self.server_configs[server_name] = {
+                            "path": server_path,
+                            "manifest": manifest
+                        }
+                    except:
+                        pass
+        
+        # 2. 清除所有服务下的 metadata 缓存文件，逼迫其重新启动/连接拉取最新工具 Schema
+        for server_name, cfg in self.server_configs.items():
+            cache_path = os.path.join(cfg["path"], "tools_metadata.json")
+            if os.path.exists(cache_path):
+                try:
+                    os.remove(cache_path)
+                    logger.info(f"已清理服务 {server_name} 的本地工具元数据缓存。")
+                except Exception as e:
+                    logger.warning(f"清理服务 {server_name} 缓存文件失败: {str(e)}")
+        
+        # 3. 清空内存中当前的缓存
+        self.all_tools = []
+        self.tool_to_session = {}
+        
+        # 4. 依次重新发现并启动 DB 同步计算逻辑
+        for server_name in self.server_configs.keys():
+            await self._discover_tools(server_name)
 
     async def _connect_server(self, server_name: str):
         """物理启动 MCP Server 进程/容器"""
