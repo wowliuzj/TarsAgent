@@ -8,6 +8,13 @@ def test_planner_prompt_contains_intent_cap_rules():
     assert "L3" in PLANNER_PROMPT
     assert "1-3" in PLANNER_PROMPT or "步" in PLANNER_PROMPT
 
+def test_planner_prompt_contains_conversational_rules():
+    """验证 PLANNER_PROMPT 中明确包含了对话与情感沟通识别规则，防止对主观/情感评价进行过度规划。"""
+    assert "对话与情感沟通识别规则" in PLANNER_PROMPT
+    assert "生硬" in PLANNER_PROMPT
+    assert "问候语" in PLANNER_PROMPT
+    assert "极简计划" in PLANNER_PROMPT
+
 def test_planner_step_parser_precision_levels():
     """验证从 Planner 大模型返回的文本步骤中，精准提取 (L1-L6) 精度等级的正则表达式逻辑。"""
     # 模拟包含不同精度级别的 Planner 输出

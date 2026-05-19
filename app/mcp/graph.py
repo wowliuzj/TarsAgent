@@ -387,18 +387,40 @@ class TarsGraphBuilder:
             executor_results.append(f"### 步骤 {i+1}：{state['task_pool'][i].description}\n{val}")
         all_facts = "\n\n".join(executor_results)
         
-        # 2. 调用 LLM 进行完美整合
+        # 2. 检查是否为纯文本对话/简单问答通道
+        # (只有 1 个子任务，且输出为非 JSON、不含技术 key 的纯文字直接回复)
+        # 如果是，则绕过 LLM 整合合成，直接以最自然的形式返回给使用者，杜绝官僚形式的“最终报告”。
+        step_1_val = shared_mem.get("step_1_result", "")
+        is_simple_chat = False
+        if len(state.get("task_pool", [])) <= 1 and isinstance(step_1_val, str) and step_1_val.strip():
+            step_1_stripped = step_1_val.strip()
+            is_json = (step_1_stripped.startswith("{") and step_1_stripped.endswith("}")) or (step_1_stripped.startswith("[") and step_1_stripped.endswith("]"))
+            has_tech_keys = any(k in step_1_val for k in ['"stdout":', '"stderr":', '"status":', '"script_written":', '"saved_markdown_path":'])
+            if not is_json and not has_tech_keys:
+                is_simple_chat = True
+                
+        if is_simple_chat:
+            final_content = step_1_val.strip()
+            prefix = "【Tars 收到您的指令，执行中...】"
+            if not final_content.startswith(prefix):
+                final_content = prefix + final_content
+            
+            logger.info("🛡️ [直接对话通道] 检测到纯文本问答/闲聊响应，直接返回 Executor 原生结果，旁路报告合成。")
+            return {"history": [AIMessage(content=final_content)]}
+        
+        # 3. 调用 LLM 进行成果整理 (软化提示词，告别机械死板的内部审计报告格式，仅改变返回给使用者的信息)
         synthesis_prompt = (
             f"你现在的身份是 Tars Agent。所有子任务已经成功执行并通过审计。\n"
-            f"你的任务是基于以下每个子任务的具体执行事实，为用户生成一份逻辑严密、排版美观、信息极其完整的最终报告。\n"
+            f"你的任务是基于以下每个子任务的具体执行事实，为人类用户生成一个完美、精美且清晰的高质量最终任务成果呈现。\n"
             f"【用户的原始需求】：\n"
             f"{state['mission'].goal}\n\n"
             f"【各个子任务的执行事实数据】：\n"
             f"{all_facts}\n\n"
-            f"【要求】：\n"
-            f"1. 严格遵守“非对话契约”，禁止输出任何闲聊、问候、交互式引导或下一步行动建议。你的回答就是最终要给用户的成果报告。\n"
+            f"【极其重要的要求】：\n"
+            f"1. 严格遵守“非对话契约”，禁止输出任何闲聊、问候、交互式引导或下一步行动建议。你的回答就是最终要给用户的成果呈现。\n"
             f"2. 最终回复的第一句必须以“【Tars 收到您的指令，执行中...】”开头。\n"
-            f"3. 保持专业性，结构化排版，把所有步骤的核心事实整合到一份排版精致的最终 Markdown 报告中。"
+            f"3. 成果导向呈现：请直接将任务的核心成果（例如：如果是抓取并转换后的 Markdown 文章，请直接将整篇高质量排版文章内容完整呈现给用户；如果是数据或表格查询，请直接给出精致的表格与分析数据）。\n"
+            f"4. 绝对禁止以“最终审计报告”、“合规性检查”、“审计结果”、“步骤 1 步骤 2 列表”等面向内部系统调试的冰冷机械报告格式输出。用户的成果才是回答的主体！"
         )
         
         dynamic_context = get_dynamic_project_context()
