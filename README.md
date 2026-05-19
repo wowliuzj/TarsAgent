@@ -37,9 +37,10 @@ graph LR
 
 ### 2. 配置与启动
 1. 复制 `env_example` 并配置 `.env`（需包含 `OPENAI_API_KEY` 和 `TAVILY_API_KEY` 等）。
-2. venv/bin/activate
-3. 启动数据库：`docker-compose up -d db`。
-4. 运行 Tars：
+2. python3 -m venv .venv
+3. source .venv/bin/activate
+4. 启动数据库：`docker-compose up -d db`。
+5. 运行 Tars：
    ```bash
    pip install -r requirements.txt
    ./tars
