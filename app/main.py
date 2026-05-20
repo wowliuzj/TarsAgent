@@ -2,20 +2,19 @@ import typer
 from typing import Optional, List
 import os
 from dotenv import load_dotenv
-from rich.console import Console
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.prompt import Prompt
 from sqlmodel import Session, select
 from app.db import init_db, engine, TarsSession
 from app.agent import TarsAgent
+from app.shared_console import console
 
 # 加载 .env 环境变量文件，让 os.getenv 能够读取到配置
 load_dotenv()
 
 # 初始化 Typer CLI 框架，Typer 是一个能快速将 Python 函数转为命令行指令的库
 app = typer.Typer(help="Tars Agent CLI - 你的命令行智能助手")
-console = Console()
 
 def get_or_create_session(session_id: int = None) -> TarsSession:
     """
@@ -49,7 +48,10 @@ async def run_chat_step(agent: TarsAgent, user_input: str):
     console.print(Rule("User Input", style="dim"))
     console.print(user_input)
     
-    with console.status("[bold yellow]Tars 正在分析需求并采取行动...[/bold yellow]"):
+    import app.shared_console as shared_console
+    status = console.status("[bold yellow]Tars 正在分析需求并采取行动...[/bold yellow]")
+    shared_console.active_status = status
+    with status:
         try:
             # 调用异步 Agent.run
             result = await agent.run(user_input)
@@ -60,6 +62,8 @@ async def run_chat_step(agent: TarsAgent, user_input: str):
             logger.error(f"Agent 执行过程中抛出异常:\n{traceback.format_exc()}")
             error_msg = str(e).split('\n')[0]
             console.print(f"\n[bold red]思考失败：[/bold red]{error_msg}")
+        finally:
+            shared_console.active_status = None
 
 @app.command()
 def chat(

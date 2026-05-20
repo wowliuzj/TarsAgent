@@ -7,12 +7,9 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, System
 from app.mcp.state import TarsState, Lane, SubTask
 from app.logger import logger
 from app.prompts import PLANNER_PROMPT, AUDITOR_PROMPT, BASE_SYSTEM_PROMPT, get_dynamic_project_context
-from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm
-
-# Global Console instance for human intervention (HITL) prompt
-console = Console()
+from app.shared_console import console
 
 def check_command_risk(command: str) -> tuple[bool, bool, str]:
     """
@@ -77,6 +74,17 @@ def prompt_user_intervention(tool_name: str, args: dict, confidence: float, thre
     在控制台打印精美的 Rich Panel 警告，并使用 Confirm.ask 确认。
     返回 True 表示批准，False 表示拒绝。
     """
+    import app.shared_console as shared_console
+    
+    # 暂停活跃的控制台 Spinner，以便于干净、无冲突地显示交互提示并读取输入
+    status_to_resume = None
+    if shared_console.active_status:
+        status_to_resume = shared_console.active_status
+        try:
+            status_to_resume.stop()
+        except Exception:
+            pass
+
     title = "[bold red]⚠️  Tars 安全与置信度人机协同介入 (HITL Interceptor)[/bold red]"
     
     content_lines = []
@@ -107,6 +115,13 @@ def prompt_user_intervention(tool_name: str, args: dict, confidence: float, thre
     except Exception as e:
         logger.error(f"HITL 交互异常: {e}")
         return False
+    finally:
+        # 恢复控制台 Spinner，继续背景思考流程
+        if status_to_resume:
+            try:
+                status_to_resume.start()
+            except Exception:
+                pass
 
 class TarsGraphBuilder:
     def __init__(self, agent_instance):
