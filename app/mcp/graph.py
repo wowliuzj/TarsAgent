@@ -323,9 +323,10 @@ class TarsGraphBuilder:
         
         tool_outputs = []
         if last_message.tool_calls:
-            # 解析 AI 思考中的自评自信度
+            # 解析 AI 思考中的自评置信度
             confidence = parse_confidence(last_message.content)
-            logger.info(f"[*] AI 动作自评自信度得分: {confidence}")
+            logger.info(f"[*] AI 动作自评置信度得分: {confidence:.2f}")
+            console.print(f"[bold cyan][*] AI 动作自评置信度得分: {confidence:.2f}[/bold cyan]")
             
             for tool_call in last_message.tool_calls:
                 tool_name = tool_call["name"]
