@@ -1,11 +1,112 @@
 import os
 import json
+import re
 from typing import Dict, List, Any, Union
 from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, SystemMessage
 from app.mcp.state import TarsState, Lane, SubTask
 from app.logger import logger
 from app.prompts import PLANNER_PROMPT, AUDITOR_PROMPT, BASE_SYSTEM_PROMPT, get_dynamic_project_context
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Confirm
+
+# Global Console instance for human intervention (HITL) prompt
+console = Console()
+
+def check_command_risk(command: str) -> tuple[bool, bool, str]:
+    """
+    检查终端命令是否包含绝对阻断或需要人机确认的高危行为。
+    返回: (is_blocked, is_warning, reason)
+    """
+    cmd_lower = command.lower()
+    
+    # 1. 越权提升 (绝对阻断)
+    if re.search(r"\b(sudo|su)\b", command):
+        return True, False, "检测到特权提升指令 (sudo/su)，绝对禁止执行！"
+        
+    # 2. 敏感文件探测/泄露 (绝对阻断)
+    sensitive_patterns = [".env", ".git", "id_rsa", "config.json"]
+    for sf in sensitive_patterns:
+        if sf in command:
+            return True, False, f"检测到对敏感文件/目录 '{sf}' 的操作，绝对禁止执行！"
+            
+    # 3. 反弹后门与安全外壳 (绝对阻断)
+    if "/dev/tcp" in cmd_lower or "nc -l" in cmd_lower or "netcat" in cmd_lower:
+        return True, False, "检测到反弹/后门监听命令，绝对禁止执行！"
+        
+    # 4. 毁灭性删除 (人机确认授权，若删除核心代码目录则绝对阻断)
+    if "rm " in command or "rmdir " in command:
+        if re.search(r"\brm\s+-[a-zA-Z]*[rfRF]\b", command) or "--recursive" in command or "-rf" in command or "-fr" in command:
+            # 检查是否试图删除核心目录
+            core_dirs = ["app", "mcp_servers", "tests", "docs", "TARS.md", "SOUL.md"]
+            for d in core_dirs:
+                if re.search(rf"\b{re.escape(d)}\b", command) or rf"/{d}" in command:
+                    return True, False, f"检测到尝试毁灭性删除核心代码或骨架目录 '{d}'，绝对禁止执行！"
+            return False, True, "检测到带有递归或强制删除标志的删除命令 (rm -rf/rm -r)，具有高破坏性！"
+            
+    # 5. 权限强改 (人机确认授权)
+    if re.search(r"\b(chmod|chown|chgrp)\b", command):
+        return False, True, "检测到尝试修改文件所有权或访问权限的指令 (chmod/chown/chgrp)！"
+        
+    # 6. 敏感数据外传 (人机确认授权)
+    if "curl" in cmd_lower or "wget" in cmd_lower:
+        if re.search(r"\b(curl|wget)\b.*(-[fF]|--post-file|--data|--form)\b", cmd_lower):
+            return False, True, "检测到可能外传本地敏感数据的网络请求 (curl/wget with POST/Form flags)！"
+            
+    return False, False, ""
+
+def parse_confidence(content: str) -> float:
+    """
+    从 Executor 思考的 thought 文本中解析自评自信度得分。
+    """
+    if not content:
+        return 0.85  # 未匹配到时默认 0.85
+        
+    match = re.search(r"(?:Confidence|置信度|自信度)[:：]\s*(0?\.\d+|1\.0|1)", content, re.IGNORECASE)
+    if match:
+        try:
+            return float(match.group(1))
+        except ValueError:
+            pass
+            
+    return 0.85
+
+def prompt_user_intervention(tool_name: str, args: dict, confidence: float, threshold: float, warning_reason: str = "") -> bool:
+    """
+    在控制台打印精美的 Rich Panel 警告，并使用 Confirm.ask 确认。
+    返回 True 表示批准，False 表示拒绝。
+    """
+    title = "[bold red]⚠️  Tars 安全与置信度人机协同介入 (HITL Interceptor)[/bold red]"
+    
+    content_lines = []
+    if warning_reason:
+        content_lines.append(f"[bold yellow]警告原因[/bold yellow]: {warning_reason}")
+    else:
+        content_lines.append(f"[bold yellow]警告原因[/bold yellow]: AI 执行此动作的自信度评分低于系统安全线")
+        
+    content_lines.append(f"[bold]调用工具[/bold]: [cyan]{tool_name}[/cyan]")
+    content_lines.append(f"[bold]工具参数[/bold]: {json.dumps(args, ensure_ascii=False, indent=2)}")
+    content_lines.append(f"[bold]当前置信度[/bold]: [bold red]{confidence:.2f}[/bold red] (安全阈值: [green]{threshold:.2f}[/green])")
+    content_lines.append("")
+    content_lines.append("[dim]提示: 拒绝此动作后，系统会安全回馈报错给 AI，AI 将会自我修正并换用其他安全路径。[/dim]")
+    
+    panel = Panel(
+        "\n".join(content_lines),
+        title=title,
+        border_style="yellow",
+        expand=False
+    )
+    
+    console.print("\n")
+    console.print(panel)
+    
+    try:
+        approved = Confirm.ask("[bold yellow]你是否授权执行此操作？[/bold yellow]", default=False)
+        return approved
+    except Exception as e:
+        logger.error(f"HITL 交互异常: {e}")
+        return False
 
 class TarsGraphBuilder:
     def __init__(self, agent_instance):
@@ -222,51 +323,67 @@ class TarsGraphBuilder:
         
         tool_outputs = []
         if last_message.tool_calls:
+            # 解析 AI 思考中的自评自信度
+            confidence = parse_confidence(last_message.content)
+            logger.info(f"[*] AI 动作自评自信度得分: {confidence}")
+            
             for tool_call in last_message.tool_calls:
                 tool_name = tool_call["name"]
                 args = dict(tool_call["args"])  # Copy args to allow modification
                 logger.info(f"[*] MCP 调用: {tool_name}({args})")
                 
-                # --- 工作区隔离路径拦截与安全重定向 ---
-                redirected_msg = ""
-                
-                # 1. 针对 read_file/write_file 进行路径参数过滤与修正
-                if tool_name in ["write_file", "read_file"] and "file_path" in args:
-                    path_val = args["file_path"]
-                    allowed_coding_dirs = [
-                        "app/", "mcp_servers/", "docs/", ".env", 
-                        "TARS.md", "SOUL.md", "requirements.txt", 
-                        "TODO.md", "Dockerfile", "docker-compose.yml",
-                        "README.md", "CHANGELOG.md"
-                    ]
-                    # 如果不是在允许的代码维护路径下，且不以 data/ 或 tmp/ 开头
-                    is_coding_task = any(path_val.startswith(d) for d in allowed_coding_dirs) or path_val in allowed_coding_dirs
-                    
-                    if not is_coding_task and not (path_val.startswith("data/") or path_val.startswith("tmp/")):
-                        import os
-                        filename = os.path.basename(path_val)
-                        new_path = f"tmp/{filename}"
-                        args["file_path"] = new_path
-                        logger.warning(f"⚠️ [工作区拦截器] 拦截到违规路径 '{path_val}'，已自动安全重定向至安全工作区: '{new_path}'")
-                        redirected_msg = f"【安全提醒：由于路径合规规范限制，文件已自动安全重定向保存至 '{new_path}'。请你在此后的执行与陈述中均采用此重定向后的新路径。】\n"
-                
-                # 2. 针对 list_files 进行路径修正
-                elif tool_name == "list_files" and "directory" in args:
-                    dir_val = args["directory"]
-                    allowed_coding_dirs = [
-                        "app", "mcp_servers", "docs", "data", "tmp"
-                    ]
-                    is_coding_task = any(dir_val.startswith(d) for d in allowed_coding_dirs) or dir_val in allowed_coding_dirs or dir_val == "." or dir_val.startswith("data/") or dir_val.startswith("tmp/")
-                    if not is_coding_task:
-                        args["directory"] = "tmp"
-                        logger.warning(f"⚠️ [工作区拦截器] 拦截到违规目录列表请求 '{dir_val}'，已自动重定向至安全工作区: 'tmp'")
-                        redirected_msg = "【安全提醒：由于路径合规规范限制，目录已自动重定向定位至 'tmp'。】\n"
+                # 确定该工具的安全置信度阈值 (由环境变量动态配置，提供安全默认值)
+                try:
+                    base_threshold = float(os.getenv("BASE_CONFIDENCE_THRESHOLD", "0.85"))
+                except ValueError:
+                    logger.warning("⚠️ 环境变量 BASE_CONFIDENCE_THRESHOLD 格式错误，使用默认值 0.85")
+                    base_threshold = 0.85
 
-                # 调用 MCP Manager
-                result = await self.agent.mcp_manager.call_tool(tool_name, args)
+                try:
+                    terminal_threshold = float(os.getenv("TERMINAL_CONFIDENCE_THRESHOLD", "0.95"))
+                except ValueError:
+                    logger.warning("⚠️ 环境变量 TERMINAL_CONFIDENCE_THRESHOLD 格式错误，使用默认值 0.95")
+                    terminal_threshold = 0.95
+
+                active_threshold = base_threshold
+                if tool_name == "run_terminal_command":
+                    active_threshold = terminal_threshold
                 
-                # 3. 增加大模型上下文截断保护哨兵 (Tool Output Truncation Safeguard)
-                # 保护阈值设为 50000 字符（约合 1.25 万 Tokens 左右），确保绝不撑爆上下文视界
+                # 检查高危终端命令风险
+                is_blocked = False
+                is_warning = False
+                reason = ""
+                if tool_name == "run_terminal_command" and "command" in args:
+                    is_blocked, is_warning, reason = check_command_risk(args["command"])
+                
+                # 双重纵深防御与人机协同介入决策逻辑
+                if is_blocked:
+                    logger.error(f"❌ 安全阻断: {reason}")
+                    result = f"【安全阻断：该终端指令由于触发物理沙箱安全规则被绝对拦截。原因：{reason}】"
+                elif is_warning or confidence < active_threshold:
+                    warning_reason = reason if is_warning else f"AI 自评置信度 ({confidence:.2f}) 低于该工具的安全阈值线 ({active_threshold:.2f})"
+                    logger.warning(f"⚠️ 触发人机协同介入确认: {warning_reason}")
+                    
+                    approved = prompt_user_intervention(
+                        tool_name=tool_name,
+                        args=args,
+                        confidence=confidence,
+                        threshold=active_threshold,
+                        warning_reason=warning_reason
+                    )
+                    
+                    if approved:
+                        logger.info("✅ 用户手动授权通过，继续交付物理执行。")
+                        result = await self.agent.mcp_manager.call_tool(tool_name, args)
+                    else:
+                        logger.warning("❌ 用户手动拒绝授权，拦截执行并触发 AI 自愈。")
+                        result = f"【安全阻断：由于置信度过低或具有潜在破坏风险，人类控制者手动拒绝了此授权。原因：{warning_reason}。请你换用其他安全、高置信度或非破坏性的做法。】"
+                else:
+                    # 正常安全执行
+                    result = await self.agent.mcp_manager.call_tool(tool_name, args)
+                
+                # 增加大模型上下文截断保护哨兵 (Tool Output Truncation Safeguard)
+                # 保护阈值设为 50000 字符（约合 1.25 万 Tokens 左右），确保绝对不撑爆上下文视界
                 MAX_TOOL_OUTPUT_CHARS = 50000
                 if isinstance(result, str) and len(result) > MAX_TOOL_OUTPUT_CHARS:
                     original_len = len(result)
@@ -277,9 +394,6 @@ class TarsGraphBuilder:
                         f"【...剩余 {original_len - MAX_TOOL_OUTPUT_CHARS} 字符已被系统安全自动截断...】"
                     )
                     logger.warning(f"🛡️ [截断保护哨兵] 成功拦截并截断了工具 '{tool_name}' 的巨量输出（从 {original_len} 字符截断至 {MAX_TOOL_OUTPUT_CHARS}）")
-                
-                if redirected_msg:
-                    result = redirected_msg + result
                 
                 tool_outputs.append(ToolMessage(
                     tool_call_id=tool_call["id"],

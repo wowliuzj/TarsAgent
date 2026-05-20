@@ -75,6 +75,16 @@ def list_files(directory: str = ".") -> str:
 def run_terminal_command(command: str) -> str:
     """在项目根目录下执行终端命令，支持读写各种代码与 data/ 或 tmp/ 目录下的文件。"""
     try:
+        # 1. 拦截 sudo, su 等特权提升指令
+        import re
+        if re.search(r"\b(sudo|su)\b", command):
+            raise PermissionError("物理沙箱阻断: 禁止使用 sudo 或 su 提升权限！")
+            
+        # 2. 拦截对敏感文件（如 .env, .git, id_rsa 等）的读写与探测操作
+        for sf in SENSITIVE_FILES:
+            if sf in command:
+                raise PermissionError(f"物理沙箱阻断: 禁止在终端指令中操作敏感文件/目录 '{sf}'！")
+                
         # 确保 tmp/ 物理目录存在，以备存放临时脚本和计算碎片
         tmp_path = os.path.join(PROJECT_ROOT, "tmp")
         os.makedirs(tmp_path, exist_ok=True)

@@ -19,7 +19,7 @@ def test_run_terminal_command_cwd_aligned():
 
 @pytest.mark.asyncio
 async def test_workspace_interceptor_paths():
-    """验证工作区拦截器在 data/ 与 tmp/ 冷热分离新规则下的路径修改行为。"""
+    """验证工作区在开放目录下的正常读写行为（无重定向）。"""
     # 1. Mock TarsGraphBuilder 中的 agent 实例和 mcp_manager
     mock_agent = MagicMock()
     mock_mcp_manager = MagicMock()
@@ -28,12 +28,12 @@ async def test_workspace_interceptor_paths():
     
     builder = TarsGraphBuilder(agent_instance=mock_agent)
     
-    # 2. Case A: 写入允许的数据目录 data/article/article.md -> 不应拦截重定向
+    # 2. Case A: 写入 article.md -> 不应拦截重定向，直接物理自由写入
     state_a = {
         "history": [
-            AIMessage(content="", tool_calls=[{
+            AIMessage(content="Confidence: 0.95", tool_calls=[{
                 "name": "write_file",
-                "args": {"file_path": "data/article/article.md", "content": "test"},
+                "args": {"file_path": "article.md", "content": "test"},
                 "id": "call_1"
             }])
         ]
@@ -41,13 +41,13 @@ async def test_workspace_interceptor_paths():
     await builder.tool_node(state_a)
     mock_mcp_manager.call_tool.assert_called_with(
         "write_file", 
-        {"file_path": "data/article/article.md", "content": "test"}
+        {"file_path": "article.md", "content": "test"}
     )
     
     # 3. Case B: 写入允许的临时目录 tmp/scrape.py -> 不应拦截重定向
     state_b = {
         "history": [
-            AIMessage(content="", tool_calls=[{
+            AIMessage(content="Confidence: 0.95", tool_calls=[{
                 "name": "write_file",
                 "args": {"file_path": "tmp/scrape.py", "content": "print(1)"},
                 "id": "call_2"
@@ -59,26 +59,10 @@ async def test_workspace_interceptor_paths():
         "write_file", 
         {"file_path": "tmp/scrape.py", "content": "print(1)"}
     )
-    
-    # 4. Case C: 写入非法/未分类的根级文件 article.md -> 应该拦截并安全重定向至 tmp/article.md
-    state_c = {
-        "history": [
-            AIMessage(content="", tool_calls=[{
-                "name": "write_file",
-                "args": {"file_path": "article.md", "content": "leak"},
-                "id": "call_3"
-            }])
-        ]
-    }
-    await builder.tool_node(state_c)
-    mock_mcp_manager.call_tool.assert_called_with(
-        "write_file", 
-        {"file_path": "tmp/article.md", "content": "leak"}
-    )
 
 @pytest.mark.asyncio
 async def test_workspace_interceptor_list_files():
-    """验证 list_files 的路径过滤拦截行为。"""
+    """验证 list_files 的路径自由列表查询行为（无重定向）。"""
     mock_agent = MagicMock()
     mock_mcp_manager = MagicMock()
     mock_mcp_manager.call_tool = AsyncMock(return_value="dir_list")
@@ -89,7 +73,7 @@ async def test_workspace_interceptor_list_files():
     # Case A: 查询允许的 data/ 目录 -> 不拦截
     state_a = {
         "history": [
-            AIMessage(content="", tool_calls=[{
+            AIMessage(content="Confidence: 0.95", tool_calls=[{
                 "name": "list_files",
                 "args": {"directory": "data/article"},
                 "id": "call_4"
@@ -102,10 +86,10 @@ async def test_workspace_interceptor_list_files():
         {"directory": "data/article"}
     )
     
-    # Case B: 查询不合规的根级或其它目录 -> 自动重定向至 tmp 目录
+    # Case B: 查询不合规的其它目录 -> 亦不拦截重定向，物理目录完全放开
     state_b = {
         "history": [
-            AIMessage(content="", tool_calls=[{
+            AIMessage(content="Confidence: 0.95", tool_calls=[{
                 "name": "list_files",
                 "args": {"directory": "sensitive_folder"},
                 "id": "call_5"
@@ -115,8 +99,68 @@ async def test_workspace_interceptor_list_files():
     await builder.tool_node(state_b)
     mock_mcp_manager.call_tool.assert_called_with(
         "list_files", 
-        {"directory": "tmp"}
+        {"directory": "sensitive_folder"}
     )
+
+@pytest.mark.asyncio
+async def test_confidence_and_safety_hitl(monkeypatch):
+    """验证置信度低于阈值或触发高危动作时，HITL 人机协同介入的处理逻辑。"""
+    mock_agent = MagicMock()
+    mock_mcp_manager = MagicMock()
+    mock_mcp_manager.call_tool = AsyncMock(return_value="tool_done")
+    mock_agent.mcp_manager = mock_mcp_manager
+    
+    builder = TarsGraphBuilder(agent_instance=mock_agent)
+    
+    # 1. 模拟用户手动拒绝授权 (approved = False)
+    mock_prompt = MagicMock(return_value=False)
+    monkeypatch.setattr("app.mcp.graph.prompt_user_intervention", mock_prompt)
+    
+    state_refused = {
+        "history": [
+            AIMessage(content="Confidence: 0.70", tool_calls=[{  # 置信度低于 0.85
+                "name": "write_file",
+                "args": {"file_path": "data/article.md", "content": "leak"},
+                "id": "call_refuse"
+            }])
+        ]
+    }
+    
+    res = await builder.tool_node(state_refused)
+    tool_msg = res["history"][0]
+    
+    # 验证是否触发了人机协同介入
+    mock_prompt.assert_called_once()
+    # 验证工具物理调用未发生
+    mock_mcp_manager.call_tool.assert_not_called()
+    # 验证返回了安全阻断回执以促进 AI 自愈
+    assert "安全阻断" in tool_msg.content
+    assert "人类控制者手动拒绝了此授权" in tool_msg.content
+
+    # 2. 模拟用户手动授权通过 (approved = True)
+    mock_prompt.reset_mock()
+    mock_prompt.return_value = True
+    
+    state_approved = {
+        "history": [
+            AIMessage(content="Confidence: 0.70", tool_calls=[{
+                "name": "write_file",
+                "args": {"file_path": "data/article.md", "content": "leak"},
+                "id": "call_approve"
+            }])
+        ]
+    }
+    
+    res_app = await builder.tool_node(state_approved)
+    tool_msg_app = res_app["history"][0]
+    
+    # 验证用户被提问，且物理工具正常执行
+    mock_prompt.assert_called_once()
+    mock_mcp_manager.call_tool.assert_called_once_with(
+        "write_file",
+        {"file_path": "data/article.md", "content": "leak"}
+    )
+    assert tool_msg_app.content == "tool_done"
 
 @pytest.mark.asyncio
 async def test_workspace_interceptor_truncation():
