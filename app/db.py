@@ -85,6 +85,42 @@ class MCPToolIndex(SQLModel, table=True):
     tool_schema: Dict[str, Any] = Field(sa_column=Column(JSON))
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
+
+class TraceRun(SQLModel, table=True):
+    """
+    Trace 运行摘要表：记录每次 trace 的生命周期，用于 Metabase 聚合查询。
+    """
+    __tablename__ = "trace_runs"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    trace_id: str = Field(index=True, unique=True)
+    session_id: Optional[int] = Field(default=None, index=True)
+    goal: Optional[str] = None
+    started_at: Optional[datetime] = Field(default=None, index=True)
+    completed_at: Optional[datetime] = Field(default=None, index=True)
+    status: str = Field(default="running", index=True)
+    response_length: Optional[int] = None
+    run_metadata: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class TraceEventRecord(SQLModel, table=True):
+    """
+    Trace 事件明细表：每条事件一行，支持按 trace_id 回放与多维统计。
+    """
+    __tablename__ = "trace_events"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    trace_id: str = Field(index=True)
+    event_id: str = Field(index=True, unique=True)
+    ts: datetime = Field(index=True)
+    node: str = Field(index=True)
+    event_type: str = Field(index=True)
+    severity: str = Field(default="info", index=True)
+    payload: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
 def init_db():
     """
     初始化数据库的关键逻辑。

@@ -51,7 +51,38 @@ graph LR
 - [MCP_GUIDE.md](./MCP_GUIDE.md): 开发者指南，教你如何为 Tars 编写新的 MCP Server。
 - [docs/HARNESS_ENGINEERING.md](./docs/HARNESS_ENGINEERING.md): THP 2.0 约束协议、节点不变量和 L6 自愈沙箱技术规范。
 - [docs/SAFETY_AND_HITL.md](./docs/SAFETY_AND_HITL.md): 双重纵深防御与人机协同(HITL)机制。
+- [docs/METABASE_TRACE_DASHBOARD.md](./docs/METABASE_TRACE_DASHBOARD.md): Trace DB 化后的 Metabase 看板配置指南。
 - [CHANGELOG.md](./CHANGELOG.md): 版本变更历史。
+
+## 🔎 可观测性回放
+- 运行后会在 `logs/traces-YYYY-MM-DD.jsonl` 中记录结构化追踪事件（含 `trace_id`）。
+- 可通过 `.env` 调整追踪与审计行为：
+  - `TRACE_TOOL_PREVIEW_CHARS`：工具结果预览长度（默认 280）
+  - `AUDITOR_L1_FAST_PATH_ENABLED`：是否启用单步 L1 快速审计（默认 `true`）
+  - `TRACE_SINK_MODE`：追踪写入目标（`jsonl` / `db` / `both`，默认 `both`）
+- 使用回放脚本按 `trace_id` 复盘：
+  ```bash
+  python3 scripts/replay_trace.py <trace_id>
+  ```
+  或指定来源：
+  ```bash
+  python3 scripts/replay_trace.py <trace_id> --source db
+  python3 scripts/replay_trace.py <trace_id> --source auto
+  ```
+
+## 📊 Metabase 查询
+- Phase 2 已支持将 trace 双写到 PostgreSQL（`TRACE_SINK_MODE=both`）。
+- 初始化/更新 Metabase 查询视图：
+  ```bash
+  python3 scripts/apply_metabase_views.py
+  ```
+- 主要视图：
+  - `vw_trace_runs_summary`：运行摘要（状态、耗时、响应长度）
+  - `vw_trace_event_timeline`：事件时间线
+  - `vw_trace_llm_usage`：LLM token 消耗
+  - `vw_trace_tool_calls`：工具调用统计与结果预览
+  - `vw_trace_hitl_decisions`：HITL 决策统计
+  - `vw_trace_auditor_verdicts`：审计通过/驳回分析
 
 ---
 *Stay Human. Stay Tars.*

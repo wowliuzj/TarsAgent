@@ -1,5 +1,67 @@
 # Changelog
 
+## [2.6.6] - 2026-05-21
+### 📊 Metabase 仪表盘模板补齐（可直接配置）
+
+#### 新增能力
+- **仪表盘模板文档增强 (`docs/METABASE_TRACE_DASHBOARD.md`)**:
+  - 新增 10 张推荐卡片的“字段配置 + 可直接粘贴 SQL”模板。
+  - 覆盖运行成功率、时延趋势、LLM token、工具调用、HITL 决策、审计通过率与驳回原因分析。
+  - 增加 `trace_id` 钻取明细模板，直接联动 `replay_trace.py` 进行单次链路回放。
+
+## [2.6.5] - 2026-05-21
+### 🗄️ Phase 2 可观测性 DB 化：Trace 双写 + DB 回放 + Metabase 视图
+
+#### 新增能力
+- **Trace 数据库落盘 (`app/db.py`, `app/logger.py`)**:
+  - 新增 `trace_runs` 与 `trace_events` 表，支持 trace 生命周期与事件明细存储。
+  - `append_trace_event` 支持按 `TRACE_SINK_MODE` 写入 `jsonl` / `db` / `both`（默认 `both`）。
+  - `agent_run_started/completed/failed` 自动同步更新 `trace_runs` 状态、时间与结果长度。
+- **回放脚本升级 (`scripts/replay_trace.py`)**:
+  - 新增 `--source auto|jsonl|db`，支持从数据库直接回放 trace。
+  - `auto` 模式优先 DB，失败时自动回退 JSONL。
+- **Metabase 查询支持 (`scripts/metabase_trace_views.sql`)**:
+  - 新增 6 个分析视图：运行摘要、时间线、LLM 用量、工具调用、HITL 决策、审计判决。
+  - 新增 `scripts/apply_metabase_views.py` 一键应用视图脚本。
+- **配置与文档更新**:
+  - `.env` / `env_example` 新增 `TRACE_SINK_MODE=both`。
+  - README 补充 DB 回放与 Metabase 使用说明。
+
+## [2.6.4] - 2026-05-21
+### ⚙️ 审计与回放优化：L1 快速审计 + Reflect 事件语义修正
+
+#### 新增能力
+- **L1 轻量审计快速路径 (`app/mcp/graph.py`)**:
+  - 对单步 `L1` 任务新增 Auditor 快速路径，默认跳过 Auditor LLM 调用，直接通过审计，减少低风险问答/创意场景的 token 消耗与延迟。
+  - 新增追踪事件 `auditor_fast_path_skipped`，并在 `auditor_verdict` 中补充 `mode=l1_fast_path`。
+  - 可通过环境变量 `AUDITOR_L1_FAST_PATH_ENABLED` 动态开关（默认开启）。
+- **Reflect 事件命名修正 (`app/mcp/graph.py`)**:
+  - 将 `reflect_simple_chat_bypass` 更名为 `reflect_direct_text_bypass`，覆盖“单步文本直出”语义，避免将非闲聊场景误标为 simple chat。
+
+## [2.6.3] - 2026-05-21
+### 📡 追踪增强：LLM 调用事件与工具结果预览
+
+#### 新增能力
+- **LLM 调用可观测性 (`app/agent.py`)**:
+  - 新增 `llm_call_started` / `llm_call_finished` 事件，记录模型名、是否启用工具、响应格式、消息数与 token usage。
+  - 在 `planner`、`think`、`auditor`、`reflect` 节点统一透传 `trace_id` 与 `caller_node`，实现节点级 LLM 调用审计。
+- **工具回执预览 (`app/mcp/graph.py`)**:
+  - `tool_call_finished` 事件新增 `result_preview`（保留 `output_size`），便于快速复盘工具输出关键信息。
+  - 预览长度可通过 `TRACE_TOOL_PREVIEW_CHARS` 环境变量调整（默认 280 字符）。
+
+## [2.6.2] - 2026-05-21
+### 🔎 观测升级：统一 trace_id 与全链路事件回放
+
+#### 新增能力
+- **统一追踪标识与事件模型 (`app/mcp/state.py`)**:
+  - 新增 `trace_id` 与 `TraceEvent` 契约，支持状态机级追踪事件累计 (`trace_events`)。
+- **全链路打点 (`app/mcp/graph.py` & `app/agent.py`)**:
+  - 记录核心事件：`planner_plan_generated`、`tool_call_started/finished`、`hitl_decision`、`l6_self_heal_triggered`、`auditor_verdict`、`reflect_*` 与 `agent_run_*`。
+- **结构化事件落盘 (`app/logger.py`)**:
+  - 新增 JSONL 追踪日志输出：`logs/traces-YYYY-MM-DD.jsonl`，按行存储可检索事件。
+- **回放脚本 (`scripts/replay_trace.py`)**:
+  - 支持按 `trace_id` 回放完整时间线，便于问题复盘与行为审计。
+
 ## [2.6.1] - 2026-05-21
 ### 🧩 契约补强：自愈闭环修复、断言覆盖扩展与阈值口径统一
 

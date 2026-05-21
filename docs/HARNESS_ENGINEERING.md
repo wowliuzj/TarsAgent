@@ -81,6 +81,18 @@ graph TD
     1.  **第一层防御 (简单问答极速旁路)**：在 `reflect_node` 中，系统在判定闲聊对话 (`is_simple_chat`) 前，会自动对 `step_1_result` 进行尝试性 JSON 解析。如果其符合 `ExecutorThought` 协议，则在内存中**动态脱壳提取其真实的 `reasoning` 纯文本**再运行 simple chat 规则。使得单纯的自然语言打招呼可以直接绕过整合大模型合成阶段，零 Token 消耗、极速自然响应给使用者。
     2.  **第二层防御 (合成输出兜底脱壳)**：在 `app/agent.py` 的最终输出回执提取节点，即使 Reflector 整合成果时因继承全局系统提示词而产出了 JSON 包装的内容，提取器在向控制台输出前，会自动识别并抓取 `reasoning` 的值，完美将机器内部协议与人类友好呈现进行了物理级双轴剥离，确保控制台拿到的永远是纯净、自然的成果大文章。
 
+### 1.7 统一可观测性 Trace 回放 (Traceability & Replay)
+*   **核心实现**: [app/mcp/state.py](file:///Users/Shared/Workspace/Tars/TarsAgent/app/mcp/state.py), [app/mcp/graph.py](file:///Users/Shared/Workspace/Tars/TarsAgent/app/mcp/graph.py), [app/logger.py](file:///Users/Shared/Workspace/Tars/TarsAgent/app/logger.py)
+*   **设计细节**:
+    1.  为每次任务运行生成全局唯一 `trace_id`，并在状态机中贯穿传递。
+    2.  通过统一事件模型 `TraceEvent` 记录关键节点事件：计划输出、工具调用开始/结束、HITL 决策、L6 自愈触发、审计判决与反思收敛。
+    3.  对单步 `L1` 任务支持 `auditor_fast_path_skipped` 快速审计事件，用于标识“低风险直通审计”路径（可通过 `AUDITOR_L1_FAST_PATH_ENABLED` 开关）。
+    4.  Reflect 文本直出路径使用 `reflect_direct_text_bypass` 事件，语义覆盖“单步文本旁路合成”，避免误解为仅闲聊场景。
+    5.  所有事件以 JSONL 形式写入 `logs/traces-YYYY-MM-DD.jsonl`，支持按 `trace_id` 复盘完整执行链路。
+    6.  提供回放脚本 [scripts/replay_trace.py](file:///Users/Shared/Workspace/Tars/TarsAgent/scripts/replay_trace.py)，可直接重建任务时间线。
+    7.  Phase 2 支持 trace 双写入 PostgreSQL（`TRACE_SINK_MODE=both`），并新增 `trace_runs` / `trace_events` 表用于结构化查询。
+    8.  提供 Metabase 视图脚本 [scripts/metabase_trace_views.sql](file:///Users/Shared/Workspace/Tars/TarsAgent/scripts/metabase_trace_views.sql)，可通过 [scripts/apply_metabase_views.py](file:///Users/Shared/Workspace/Tars/TarsAgent/scripts/apply_metabase_views.py) 一键应用。
+
 ---
 
 ## 🧪 2. 约束规范单元验证

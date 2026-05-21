@@ -2,16 +2,37 @@ import os
 import json
 import re
 import shlex
+import uuid
 import subprocess
+from datetime import datetime
 from typing import Dict, List, Any, Union
 from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, SystemMessage, BaseMessage
-from app.mcp.state import TarsState, Lane, SubTask, PlannerOutput, ExecutorThought, AuditorVerdict
-from app.logger import logger
+from app.mcp.state import TarsState, Lane, SubTask, PlannerOutput, ExecutorThought, AuditorVerdict, TraceEvent
+from app.logger import logger, append_trace_event
 from app.prompts import PLANNER_PROMPT, AUDITOR_PROMPT, BASE_SYSTEM_PROMPT, get_dynamic_project_context
 from rich.panel import Panel
 from rich.prompt import Confirm
 from app.shared_console import console
+
+def make_trace_event(
+    state: TarsState,
+    node: str,
+    event_type: str,
+    payload: Dict[str, Any] | None = None,
+    severity: str = "info"
+) -> TraceEvent:
+    event = TraceEvent(
+        trace_id=state.get("trace_id", ""),
+        event_id=str(uuid.uuid4()),
+        ts=datetime.utcnow().isoformat() + "Z",
+        node=node,
+        event_type=event_type,
+        severity=severity,
+        payload=payload or {}
+    )
+    append_trace_event(event.model_dump())
+    return event
 
 def verify_state_invariants(node_name: str, state: TarsState, is_post: bool = False):
     """
@@ -26,6 +47,8 @@ def verify_state_invariants(node_name: str, state: TarsState, is_post: bool = Fa
         raise AssertionError("THP Invariant Violate: 'mission' is required in TarsState")
     if not state["mission"].goal:
         raise AssertionError("THP Invariant Violate: 'mission.goal' cannot be empty")
+    if not state.get("trace_id"):
+        raise AssertionError("THP Invariant Violate: 'trace_id' is required in TarsState")
         
     if node_name == "planner":
         if is_post:
@@ -313,6 +336,7 @@ class TarsGraphBuilder:
         """项目经理节点：负责任务拆解"""
         logger.info("--- [NODE: PLANNER] ---")
         verify_state_invariants("planner", state, is_post=False)
+        trace_events: List[TraceEvent] = []
         
         dynamic_context = get_dynamic_project_context()
         
@@ -337,7 +361,13 @@ class TarsGraphBuilder:
             logger.warning("Planner 正在根据 Auditor 意见重新规划...")
             messages.append(SystemMessage(content=f"前次计划执行失败，审计意见：{state['audit_feedback']}。请重新规划。"))
             
-        response = await self.agent._call_model(messages, use_tools=False, response_format=PlannerOutput)
+        response = await self.agent._call_model(
+            messages,
+            use_tools=False,
+            response_format=PlannerOutput,
+            trace_id=state["trace_id"],
+            caller_node="planner"
+        )
         plan_text = response.content
         logger.info(f"[*] Planner 制定的计划:\n{plan_text}")
         
@@ -371,10 +401,21 @@ class TarsGraphBuilder:
                 ))
             
         logger.info(f"[*] 成功解析出 {len(task_pool)} 个子任务步骤。")
+        trace_events.append(make_trace_event(
+            state,
+            node="planner",
+            event_type="planner_plan_generated",
+            payload={
+                "task_count": len(task_pool),
+                "tasks": [t.description for t in task_pool],
+                "precision_levels": [t.precision_level for t in task_pool]
+            }
+        ))
         
         result = {
             "task_pool": task_pool,
             "history": [SystemMessage(content=f"【当前任务计划 (由 Planner 制定)】\n{plan_text}")],
+            "trace_events": trace_events,
             "planner_retries": state.get("planner_retries", 0) + 1,
             "executor_retries": 0, # 重置执行者重试次数
             "audit_feedback": ""   # 清空反馈
@@ -477,7 +518,11 @@ class TarsGraphBuilder:
                 
         messages.extend(local_react_messages)
         
-        response = await self.agent._call_model(messages)
+        response = await self.agent._call_model(
+            messages,
+            trace_id=state["trace_id"],
+            caller_node="think"
+        )
         
         # 如果 Executor 没有调用工具，而是直接输出回答，记录下来供审计排查
         if response.content and not response.tool_calls:
@@ -497,6 +542,7 @@ class TarsGraphBuilder:
         last_message = state["history"][-1]
         
         tool_outputs = []
+        trace_events: List[TraceEvent] = []
         if last_message.tool_calls:
             # 解析 AI 思考中的自评置信度
             confidence = parse_confidence(last_message.content)
@@ -507,6 +553,12 @@ class TarsGraphBuilder:
                 tool_name = tool_call["name"]
                 args = dict(tool_call["args"])  # Copy args to allow modification
                 logger.info(f"[*] MCP 调用: {tool_name}({args})")
+                trace_events.append(make_trace_event(
+                    state,
+                    node="execute_tools",
+                    event_type="tool_call_started",
+                    payload={"tool_name": tool_name, "args": args}
+                ))
                 
                 # 确定该工具的安全置信度阈值 (由环境变量动态配置)
                 try:
@@ -516,6 +568,13 @@ class TarsGraphBuilder:
                     missing_key = str(e).strip("'")
                     logger.error(f"❌ 安全阻断: 缺失必要阈值配置 {missing_key}")
                     result = f"【安全阻断：系统缺失必要的安全阈值配置 `{missing_key}`。请先在 .env 中配置完整后再执行。】"
+                    trace_events.append(make_trace_event(
+                        state,
+                        node="execute_tools",
+                        event_type="tool_call_blocked",
+                        severity="error",
+                        payload={"tool_name": tool_name, "reason": f"missing_config:{missing_key}"}
+                    ))
                     tool_outputs.append(ToolMessage(
                         tool_call_id=tool_call["id"],
                         content=result
@@ -524,6 +583,13 @@ class TarsGraphBuilder:
                 except ValueError:
                     logger.error("❌ 安全阻断: 安全阈值配置格式非法")
                     result = "【安全阻断：检测到 BASE_CONFIDENCE_THRESHOLD 或 TERMINAL_CONFIDENCE_THRESHOLD 格式非法，请修复 .env 后重试。】"
+                    trace_events.append(make_trace_event(
+                        state,
+                        node="execute_tools",
+                        event_type="tool_call_blocked",
+                        severity="error",
+                        payload={"tool_name": tool_name, "reason": "invalid_config"}
+                    ))
                     tool_outputs.append(ToolMessage(
                         tool_call_id=tool_call["id"],
                         content=result
@@ -545,6 +611,13 @@ class TarsGraphBuilder:
                 if is_blocked:
                     logger.error(f"❌ 安全阻断: {reason}")
                     result = f"【安全阻断：该终端指令由于触发物理沙箱安全规则被绝对拦截。原因：{reason}】"
+                    trace_events.append(make_trace_event(
+                        state,
+                        node="execute_tools",
+                        event_type="tool_call_blocked",
+                        severity="error",
+                        payload={"tool_name": tool_name, "reason": reason}
+                    ))
                 elif is_warning or confidence < active_threshold:
                     warning_reason = reason if is_warning else f"AI 自评置信度 ({confidence:.2f}) 低于该工具的安全阈值线 ({active_threshold:.2f})"
                     logger.warning(f"⚠️ 触发人机协同介入确认: {warning_reason}")
@@ -556,6 +629,19 @@ class TarsGraphBuilder:
                         threshold=active_threshold,
                         warning_reason=warning_reason
                     )
+                    trace_events.append(make_trace_event(
+                        state,
+                        node="execute_tools",
+                        event_type="hitl_decision",
+                        severity="warning",
+                        payload={
+                            "tool_name": tool_name,
+                            "approved": approved,
+                            "reason": warning_reason,
+                            "confidence": confidence,
+                            "threshold": active_threshold
+                        }
+                    ))
                     
                     if approved:
                         logger.info("✅ 用户手动授权通过，继续交付物理执行。")
@@ -584,8 +670,23 @@ class TarsGraphBuilder:
                     tool_call_id=tool_call["id"],
                     content=result
                 ))
+                try:
+                    preview_chars = int(os.getenv("TRACE_TOOL_PREVIEW_CHARS", "280"))
+                except ValueError:
+                    preview_chars = 280
+                result_text = str(result)
+                trace_events.append(make_trace_event(
+                    state,
+                    node="execute_tools",
+                    event_type="tool_call_finished",
+                    payload={
+                        "tool_name": tool_name,
+                        "output_size": len(result_text),
+                        "result_preview": result_text[:preview_chars]
+                    }
+                ))
         
-        result = {"history": tool_outputs}
+        result = {"history": tool_outputs, "trace_events": trace_events}
         test_state = state.copy()
         test_state["history"] = test_state["history"] + tool_outputs
         verify_state_invariants("execute_tools", test_state, is_post=True)
@@ -594,6 +695,7 @@ class TarsGraphBuilder:
     async def register_step_node(self, state: TarsState) -> Dict[str, Any]:
         """登记当前步骤结果，进行事实蒸馏并推进指针"""
         verify_state_invariants("register_step", state, is_post=False)
+        trace_events: List[TraceEvent] = []
         idx = state.get("current_task_index", 0)
         task_pool = list(state.get("task_pool", []))
         if not task_pool:
@@ -633,8 +735,21 @@ class TarsGraphBuilder:
                             f"【测试报错详情】：\n{process.stdout or process.stderr}\n"
                             f"请分析上述报错原因，并在此步骤下重新调用工具修正代码！"
                         )
+                        trace_events.append(make_trace_event(
+                            state,
+                            node="register_step",
+                            event_type="l6_self_heal_triggered",
+                            severity="warning",
+                            payload={
+                                "step_index": idx,
+                                "test_cmd": test_cmd,
+                                "retries": retries + 1,
+                                "max_retries": max_retries
+                            }
+                        ))
                         return {
                             "history": [SystemMessage(content=feedback_msg)],
+                            "trace_events": trace_events,
                             "executor_retries": retries + 1,
                             # 关键：我们不推过 current_task_index，使其维持在 idx
                             "current_task_index": idx
@@ -644,8 +759,21 @@ class TarsGraphBuilder:
                 else:
                     logger.info("✅ [L6 Sandbox] 本地测试套件自检通过！")
                     console.print("[bold green]✅ [L6 Sandbox] 测试通过，代码自检 100% 绿色！[/bold green]")
+                    trace_events.append(make_trace_event(
+                        state,
+                        node="register_step",
+                        event_type="l6_self_test_passed",
+                        payload={"step_index": idx, "test_cmd": test_cmd}
+                    ))
             except Exception as test_err:
                 logger.error(f"[L6 Sandbox] 执行测试套件发生异常: {test_err}")
+                trace_events.append(make_trace_event(
+                    state,
+                    node="register_step",
+                    event_type="l6_self_test_error",
+                    severity="error",
+                    payload={"step_index": idx, "error": str(test_err)}
+                ))
 
         # 1. 记录此步骤的结果为 completed
         task_pool[idx] = SubTask(
@@ -662,10 +790,17 @@ class TarsGraphBuilder:
         # 3. 指针推进到下一步
         next_idx = idx + 1
         logger.info(f"✅ 子任务 {idx+1}/{len(task_pool)} 已执行完成。数据已沉淀到 shared_memory，推进指针至: {next_idx}")
+        trace_events.append(make_trace_event(
+            state,
+            node="register_step",
+            event_type="step_registered",
+            payload={"step_index": idx, "next_index": next_idx, "precision_level": level}
+        ))
         
         result = {
             "task_pool": task_pool,
             "shared_memory": shared_memory,
+            "trace_events": trace_events,
             "current_task_index": next_idx
         }
         test_state = state.copy()
@@ -677,17 +812,51 @@ class TarsGraphBuilder:
         """质量审计节点"""
         logger.info("--- [NODE: AUDITOR] ---")
         verify_state_invariants("auditor", state, is_post=False)
+        trace_events: List[TraceEvent] = []
+        task_pool = state.get("task_pool", [])
+
+        # 0. L1 轻量任务快速审计旁路：默认开启，可通过环境变量关闭。
+        # 适用于单步概念/问答类任务，避免为低风险场景再走一次完整 Auditor LLM 审计。
+        enable_l1_fast_path = os.getenv("AUDITOR_L1_FAST_PATH_ENABLED", "true").strip().lower() in ["1", "true", "yes", "on"]
+        is_l1_single_step = (
+            len(task_pool) == 1
+            and getattr(task_pool[0], "precision_level", "L3") == "L1"
+        )
+        if enable_l1_fast_path and is_l1_single_step:
+            logger.info("⚡ Auditor L1 快速路径生效：跳过 LLM 审计，直接通过。")
+            trace_events.append(make_trace_event(
+                state,
+                node="auditor",
+                event_type="auditor_fast_path_skipped",
+                payload={"reason": "single_step_l1", "approved": True}
+            ))
+            trace_events.append(make_trace_event(
+                state,
+                node="auditor",
+                event_type="auditor_verdict",
+                payload={"approved": True, "reason": "", "mode": "l1_fast_path"}
+            ))
+            result = {
+                "audit_feedback": "",
+                "trace_events": trace_events,
+                "executor_retries": state.get("executor_retries", 0),
+                "current_task_index": state["current_task_index"]
+            }
+            test_state = state.copy()
+            test_state.update(result)
+            verify_state_invariants("auditor", test_state, is_post=True)
+            return result
         
         # 1. 汇总所有子任务步骤的执行结果作为审查内容
         plan_lines = []
-        for i, subtask in enumerate(state.get("task_pool", [])):
+        for i, subtask in enumerate(task_pool):
             level = subtask.precision_level if hasattr(subtask, "precision_level") else "L3"
             plan_lines.append(f"{i+1}. {subtask.description} [Level: {level}]")
         plan_text = "\n".join(plan_lines) if plan_lines else "无明确计划"
         
         executor_results = []
         shared_mem = state.get("shared_memory", {})
-        for i, subtask in enumerate(state.get("task_pool", [])):
+        for i, subtask in enumerate(task_pool):
             key = f"step_{i+1}_result"
             val = shared_mem.get(key, "未执行/无输出")
             level = subtask.precision_level if hasattr(subtask, "precision_level") else "L3"
@@ -707,7 +876,13 @@ class TarsGraphBuilder:
             HumanMessage(content=audit_content)
         ]
         
-        response = await self.agent._call_model(messages, use_tools=False, response_format=AuditorVerdict)
+        response = await self.agent._call_model(
+            messages,
+            use_tools=False,
+            response_format=AuditorVerdict,
+            trace_id=state["trace_id"],
+            caller_node="auditor"
+        )
         raw_verdict = response.content.strip()
         logger.info(f"[*] Auditor raw output: {raw_verdict}")
         
@@ -728,9 +903,17 @@ class TarsGraphBuilder:
         logger.info(f"[*] 审计结果: {'✅ 通过' if is_approved else '❌ 驳回'}")
         if not is_approved:
             logger.warning(f"[*] 驳回理由: {reason}")
+        trace_events.append(make_trace_event(
+            state,
+            node="auditor",
+            event_type="auditor_verdict",
+            severity="warning" if not is_approved else "info",
+            payload={"approved": is_approved, "reason": reason}
+        ))
             
         result = {
             "audit_feedback": reason if not is_approved else "",
+            "trace_events": trace_events,
             "executor_retries": state.get("executor_retries", 0) + (1 if not is_approved else 0),
             "current_task_index": 0 if not is_approved else state["current_task_index"] # Rejection resets index to 0
         }
@@ -744,6 +927,7 @@ class TarsGraphBuilder:
     async def reflect_node(self, state: TarsState) -> Dict[str, Any]:
         """反思与记忆节点：在此节点对所有子任务的执行结果进行最终的聚合与提炼，生成完美的统一大文章作为最终回答"""
         logger.info("--- [NODE: REFLECT] ---")
+        trace_events: List[TraceEvent] = []
         
         # 1. 汇总所有步骤的结果
         executor_results = []
@@ -783,9 +967,15 @@ class TarsGraphBuilder:
             prefix = "【Tars 收到您的指令，执行中...】"
             if not final_content.startswith(prefix):
                 final_content = prefix + final_content
+            trace_events.append(make_trace_event(
+                state,
+                node="reflect",
+                event_type="reflect_direct_text_bypass",
+                payload={"response_length": len(final_content), "mode": "single_step_text"}
+            ))
             
             logger.info("🛡️ [直接对话通道] 检测到纯文本问答/闲聊响应，直接返回 Executor 原生结果，旁路报告合成。")
-            return {"history": [AIMessage(content=final_content)]}
+            return {"history": [AIMessage(content=final_content)], "trace_events": trace_events}
         
         # 3. 调用 LLM 进行成果整理 (软化提示词，告别机械死板的内部审计报告格式，仅改变返回给使用者的信息)
         synthesis_prompt = (
@@ -808,10 +998,21 @@ class TarsGraphBuilder:
             HumanMessage(content=synthesis_prompt)
         ]
         
-        response = await self.agent._call_model(messages, use_tools=False)
+        response = await self.agent._call_model(
+            messages,
+            use_tools=False,
+            trace_id=state["trace_id"],
+            caller_node="reflect"
+        )
+        trace_events.append(make_trace_event(
+            state,
+            node="reflect",
+            event_type="reflect_synthesized",
+            payload={"response_length": len(response.content or "")}
+        ))
         
         # 将整合后的最终 AIMessage 追加到 history 中，供外部作为 final_response 提取
-        return {"history": [response]}
+        return {"history": [response], "trace_events": trace_events}
 
     def route_after_think(self, state: TarsState) -> str:
         last_message = state["history"][-1]

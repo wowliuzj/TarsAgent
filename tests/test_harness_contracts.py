@@ -35,6 +35,8 @@ def test_state_assertions_invariants():
         "mission": Mission(id="test_mission", goal="Analyze repo"),
         "history": [HumanMessage(content="Analyze repo")],
         "shared_memory": {},
+        "trace_id": "trace_test",
+        "trace_events": [],
         "task_pool": [],
         "current_task_index": 0,
         "executor_retries": 0,
@@ -123,6 +125,8 @@ async def test_planner_node_structured_parsing():
         "mission": Mission(id="m_1", goal="Verify structure"),
         "history": [HumanMessage(content="Verify structure")],
         "shared_memory": {},
+        "trace_id": "trace_planner",
+        "trace_events": [],
         "task_pool": [],
         "current_task_index": 0,
         "executor_retries": 0,
@@ -161,6 +165,8 @@ async def test_auditor_node_structured_parsing():
         "mission": Mission(id="m_1", goal="Verify structure"),
         "history": [HumanMessage(content="Verify structure")],
         "shared_memory": {"step_1_result": "Success"},
+        "trace_id": "trace_auditor",
+        "trace_events": [],
         "task_pool": [SubTask(id="task_1", description="Check", precision_level="L3")],
         "current_task_index": 1,
         "executor_retries": 0,
@@ -180,6 +186,38 @@ async def test_auditor_node_structured_parsing():
     assert res["current_task_index"] == 0
 
 @pytest.mark.asyncio
+async def test_auditor_l1_fast_path(monkeypatch):
+    """验证 L1 单步任务走 Auditor 快速路径，并跳过 LLM 审计调用。"""
+    monkeypatch.setenv("AUDITOR_L1_FAST_PATH_ENABLED", "true")
+
+    mock_agent = MagicMock()
+    mock_agent.mcp_manager = MagicMock()
+    mock_agent._call_model = AsyncMock()
+
+    builder = TarsGraphBuilder(agent_instance=mock_agent)
+    state: TarsState = {
+        "mission": Mission(id="m_l1", goal="给出支付模式创意"),
+        "history": [HumanMessage(content="给我支付创新模式")],
+        "shared_memory": {"step_1_result": "这里是创意清单"},
+        "trace_id": "trace_auditor_l1",
+        "trace_events": [],
+        "task_pool": [SubTask(id="task_1", description="创意总结", precision_level="L1")],
+        "current_task_index": 1,
+        "executor_retries": 0,
+        "planner_retries": 0,
+        "audit_feedback": ""
+    }
+
+    res = await builder.auditor_node(state)
+
+    mock_agent._call_model.assert_not_called()
+    assert res["audit_feedback"] == ""
+    assert res["executor_retries"] == 0
+    assert res["current_task_index"] == 1
+    assert any(e.event_type == "auditor_fast_path_skipped" for e in res["trace_events"])
+    assert any(e.event_type == "auditor_verdict" for e in res["trace_events"])
+
+@pytest.mark.asyncio
 async def test_l6_self_testing_healing_loop():
     """验证 L6 精度下自检失败触发自愈重试的完整闭环流程"""
     mock_agent = MagicMock()
@@ -189,6 +227,8 @@ async def test_l6_self_testing_healing_loop():
         "mission": Mission(id="m_1", goal="L6 Check"),
         "history": [HumanMessage(content="L6 Check"), AIMessage(content="Code written")],
         "shared_memory": {},
+        "trace_id": "trace_l6",
+        "trace_events": [],
         "task_pool": [SubTask(id="task_1", description="L6 Code change", precision_level="L6")],
         "current_task_index": 0,
         "executor_retries": 0,
@@ -231,6 +271,8 @@ async def test_response_unwrapping_double_defense():
         "mission": Mission(id="m_1", goal="今天天气怎么样？"),
         "history": [HumanMessage(content="今天天气怎么样？")],
         "shared_memory": {"step_1_result": json_result},
+        "trace_id": "trace_reflect",
+        "trace_events": [],
         "task_pool": [SubTask(id="task_1", description="闲聊问答", precision_level="L1")],
         "current_task_index": 1,
         "executor_retries": 0,

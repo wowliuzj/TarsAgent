@@ -41,3 +41,9 @@ ALL_PROXY=http://127.0.0.1:7890
 BASE_CONFIDENCE_THRESHOLD=0.75
 # 终端执行命令安全置信值 (默认 0.85)
 TERMINAL_CONFIDENCE_THRESHOLD=0.85
+# tool_call_finished 的输出预览长度 (默认 280)
+TRACE_TOOL_PREVIEW_CHARS=280
+# L1 单步任务是否启用 Auditor 快速审计旁路 (默认 true)
+AUDITOR_L1_FAST_PATH_ENABLED=true
+# trace 事件写入目的地: jsonl / db / both (默认 both)
+TRACE_SINK_MODE=both

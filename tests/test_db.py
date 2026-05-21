@@ -1,5 +1,6 @@
 from sqlmodel import Session, select
-from app.db import TarsSession, TarsMessage, MCPToolIndex, KnowledgeBase
+from app.db import TarsSession, TarsMessage, MCPToolIndex, KnowledgeBase, TraceRun, TraceEventRecord
+from datetime import datetime
 
 def test_db_session_and_message_relationship(db_session: Session):
     """验证 TarsSession 与 TarsMessage 表的创建、数据存取及一对多关联关系。"""
@@ -63,3 +64,37 @@ def test_mcp_tool_index_mapping(db_session: Session):
     queried_tool = db_session.exec(stmt).first()
     assert queried_tool is not None
     assert len(queried_tool.embedding) == 3072
+
+
+def test_trace_tables_mapping(db_session: Session):
+    """验证 trace_runs / trace_events 表结构映射和基础读写。"""
+    run = TraceRun(
+        trace_id="trace_test_001",
+        session_id=999,
+        goal="测试 trace 表",
+        status="running",
+    )
+    db_session.add(run)
+    db_session.commit()
+    db_session.refresh(run)
+    assert run.id is not None
+
+    event = TraceEventRecord(
+        trace_id="trace_test_001",
+        event_id="event_test_001",
+        ts=datetime.utcnow(),
+        node="agent",
+        event_type="agent_run_started",
+        severity="info",
+        payload={"session_id": 999, "goal": "测试 trace 表"},
+    )
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+    assert event.id is not None
+
+    queried_run = db_session.exec(select(TraceRun).where(TraceRun.trace_id == "trace_test_001")).first()
+    queried_event = db_session.exec(select(TraceEventRecord).where(TraceEventRecord.event_id == "event_test_001")).first()
+    assert queried_run is not None
+    assert queried_event is not None
+    assert queried_event.payload["session_id"] == 999

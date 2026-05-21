@@ -95,6 +95,8 @@ async def test_dynamic_confidence_thresholds(monkeypatch):
     
     # 即使置信度是很高 (比如 0.96)，依然低于 0.99 阈值，这在之前默认 0.85 情况下是绝对不会触发人机确认的
     state = {
+        "trace_id": "trace_env_test",
+        "trace_events": [],
         "history": [
             AIMessage(content="Confidence: 0.96", tool_calls=[{
                 "name": "write_file",
@@ -117,6 +119,8 @@ async def test_dynamic_confidence_thresholds(monkeypatch):
     
     # AI 评分 0.86，高于默认退避阈值 0.75，所以不应触发人机协同
     state_fallback = {
+        "trace_id": "trace_env_fallback",
+        "trace_events": [],
         "history": [
             AIMessage(content="Confidence: 0.86", tool_calls=[{
                 "name": "write_file",

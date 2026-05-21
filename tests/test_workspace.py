@@ -30,6 +30,8 @@ async def test_workspace_interceptor_paths():
     
     # 2. Case A: 写入 article.md -> 不应拦截重定向，直接物理自由写入
     state_a = {
+        "trace_id": "trace_ws_a",
+        "trace_events": [],
         "history": [
             AIMessage(content="Confidence: 0.95", tool_calls=[{
                 "name": "write_file",
@@ -46,6 +48,8 @@ async def test_workspace_interceptor_paths():
     
     # 3. Case B: 写入允许的临时目录 tmp/scrape.py -> 不应拦截重定向
     state_b = {
+        "trace_id": "trace_ws_b",
+        "trace_events": [],
         "history": [
             AIMessage(content="Confidence: 0.95", tool_calls=[{
                 "name": "write_file",
@@ -72,6 +76,8 @@ async def test_workspace_interceptor_list_files():
     
     # Case A: 查询允许的 data/ 目录 -> 不拦截
     state_a = {
+        "trace_id": "trace_ls_a",
+        "trace_events": [],
         "history": [
             AIMessage(content="Confidence: 0.95", tool_calls=[{
                 "name": "list_files",
@@ -88,6 +94,8 @@ async def test_workspace_interceptor_list_files():
     
     # Case B: 查询不合规的其它目录 -> 亦不拦截重定向，物理目录完全放开
     state_b = {
+        "trace_id": "trace_ls_b",
+        "trace_events": [],
         "history": [
             AIMessage(content="Confidence: 0.95", tool_calls=[{
                 "name": "list_files",
@@ -117,6 +125,8 @@ async def test_confidence_and_safety_hitl(monkeypatch):
     monkeypatch.setattr("app.mcp.graph.prompt_user_intervention", mock_prompt)
     
     state_refused = {
+        "trace_id": "trace_hitl_refuse",
+        "trace_events": [],
         "history": [
             AIMessage(content="Confidence: 0.70", tool_calls=[{  # 置信度低于 0.85
                 "name": "write_file",
@@ -142,6 +152,8 @@ async def test_confidence_and_safety_hitl(monkeypatch):
     mock_prompt.return_value = True
     
     state_approved = {
+        "trace_id": "trace_hitl_approve",
+        "trace_events": [],
         "history": [
             AIMessage(content="Confidence: 0.70", tool_calls=[{
                 "name": "write_file",
@@ -175,6 +187,8 @@ async def test_workspace_interceptor_truncation():
     builder = TarsGraphBuilder(agent_instance=mock_agent)
     
     state = {
+        "trace_id": "trace_truncate",
+        "trace_events": [],
         "history": [
             AIMessage(content="", tool_calls=[{
                 "name": "read_file",
@@ -216,6 +230,8 @@ async def test_workspace_reflect_natural_response():
         "shared_memory": {
             "step_1_result": "作为 AI，我不具备情绪，但我很好，随时准备帮助你。"
         },
+        "trace_id": "trace_reflect_a",
+        "trace_events": [],
         "history": []
     }
     
@@ -242,6 +258,8 @@ async def test_workspace_reflect_natural_response():
             "step_1_result": '{"script_written": "tmp/scrape.py"}',
             "step_2_result": '{"status": "success", "content": "# Markdown content"}'
         },
+        "trace_id": "trace_reflect_b",
+        "trace_events": [],
         "history": []
     }
     
@@ -276,6 +294,8 @@ async def test_workspace_planner_node_for_conversational_chat():
     state = {
         "mission": Mission(id="m_3", goal="为什么你的回答总是那么生硬？"),
         "task_pool": [],
+        "trace_id": "trace_plan_chat",
+        "trace_events": [],
         "history": [],
         "planner_retries": 0
     }
@@ -289,5 +309,4 @@ async def test_workspace_planner_node_for_conversational_chat():
     assert task_pool[0].precision_level == "L1"
     # 3. 验证任务描述与原生预期一致
     assert "友好温和地向用户解释" in task_pool[0].description
-
 

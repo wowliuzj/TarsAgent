@@ -6,9 +6,9 @@ from typing import List, Dict, Any, Optional, Type
 from datetime import datetime
 from pydantic import BaseModel
 
-from app.logger import logger
+from app.logger import logger, append_trace_event
 from app.mcp.client_manager import MCPClientManager
-from app.mcp.state import TarsState, Mission, Lane
+from app.mcp.state import TarsState, Mission, Lane, TraceEvent
 from app.mcp.graph import TarsGraphBuilder
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 from litellm import completion
@@ -37,6 +37,7 @@ class TarsAgent:
     async def run(self, user_input: str) -> str:
         """执行 Tars 2.0 任务流"""
         await self._init_mcp()
+        trace_id = str(uuid.uuid4())
         
         # 获取动态项目上下文
         dynamic_context = get_dynamic_project_context()
@@ -52,6 +53,8 @@ class TarsAgent:
                 HumanMessage(content=user_input)
             ],
             "shared_memory": {},
+            "trace_id": trace_id,
+            "trace_events": [],
             "task_pool": [],
             "audit_log": [],
             "current_lane": Lane.EXECUTION,
@@ -61,11 +64,31 @@ class TarsAgent:
             "planner_retries": 0,
             "audit_feedback": ""
         }
+        append_trace_event(TraceEvent(
+            trace_id=trace_id,
+            event_id=str(uuid.uuid4()),
+            ts=datetime.utcnow().isoformat() + "Z",
+            node="agent",
+            event_type="agent_run_started",
+            payload={"session_id": self.session_id, "goal": user_input}
+        ).model_dump())
 
         logger.info(f"🚀 启动任务泳道: {initial_state['current_lane']}")
         
         # 2. 调用图引擎 (自动处理 ReAct 循环)
-        final_state = await self.graph.ainvoke(initial_state)
+        try:
+            final_state = await self.graph.ainvoke(initial_state)
+        except Exception as e:
+            append_trace_event(TraceEvent(
+                trace_id=trace_id,
+                event_id=str(uuid.uuid4()),
+                ts=datetime.utcnow().isoformat() + "Z",
+                node="agent",
+                event_type="agent_run_failed",
+                severity="error",
+                payload={"error": str(e)}
+            ).model_dump())
+            raise
         
         # 3. 提取最终回答
         final_response = "未能获取到回答。"
@@ -82,6 +105,15 @@ class TarsAgent:
                 except Exception:
                     final_response = msg.content
                 break
+
+        append_trace_event(TraceEvent(
+            trace_id=trace_id,
+            event_id=str(uuid.uuid4()),
+            ts=datetime.utcnow().isoformat() + "Z",
+            node="agent",
+            event_type="agent_run_completed",
+            payload={"response_length": len(final_response)}
+        ).model_dump())
         
         return final_response
 
@@ -89,7 +121,9 @@ class TarsAgent:
         self,
         messages: List[BaseMessage],
         use_tools: bool = True,
-        response_format: Optional[Type[BaseModel]] = None
+        response_format: Optional[Type[BaseModel]] = None,
+        trace_id: Optional[str] = None,
+        caller_node: str = "unknown"
     ) -> AIMessage:
         """适配 LiteLLM 调用并返回 AIMessage"""
         llm_messages = []
@@ -134,6 +168,21 @@ class TarsAgent:
         }
         if response_format:
             completion_kwargs["response_format"] = response_format
+        
+        if trace_id:
+            append_trace_event(TraceEvent(
+                trace_id=trace_id,
+                event_id=str(uuid.uuid4()),
+                ts=datetime.utcnow().isoformat() + "Z",
+                node=caller_node,
+                event_type="llm_call_started",
+                payload={
+                    "model": self.model,
+                    "use_tools": use_tools,
+                    "message_count": len(llm_messages),
+                    "response_format": response_format.__name__ if response_format else None
+                }
+            ).model_dump())
 
         response = await asyncio.to_thread(
             completion,
@@ -151,6 +200,28 @@ class TarsAgent:
                     "name": tc.function.name,
                     "args": json.loads(tc.function.arguments)
                 })
+        
+        if trace_id:
+            usage = {}
+            if hasattr(response, "usage") and response.usage:
+                usage = {
+                    "prompt_tokens": getattr(response.usage, "prompt_tokens", None),
+                    "completion_tokens": getattr(response.usage, "completion_tokens", None),
+                    "total_tokens": getattr(response.usage, "total_tokens", None)
+                }
+            append_trace_event(TraceEvent(
+                trace_id=trace_id,
+                event_id=str(uuid.uuid4()),
+                ts=datetime.utcnow().isoformat() + "Z",
+                node=caller_node,
+                event_type="llm_call_finished",
+                payload={
+                    "model": self.model,
+                    "tool_calls_count": len(tool_calls),
+                    "content_length": len(resp_msg.content or ""),
+                    "usage": usage
+                }
+            ).model_dump())
         
         return AIMessage(content=resp_msg.content or "", tool_calls=tool_calls)
 
