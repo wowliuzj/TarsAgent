@@ -50,9 +50,10 @@ graph TD
 *   **核心实现**: [app/mcp/graph.py](file:///Users/Shared/Workspace/Tars/TarsAgent/app/mcp/graph.py) 中的 `verify_state_invariants`
 *   **设计细节**:
     为了防范大模型随着上下文拉长或调用分支复杂化而出现“记忆漂移”或“状态污染”，我们在有向无环图 (DAG) 的每次节点转换前后，注入了严密的前置与后置**状态断言保障线 (State Guardrails)**：
-    *   **Planner 校验**：前置断言 `mission` 对象必须包含合法的 `goal`。后置断言任务拆解池 `task_pool` 绝不能为空，且所有子步骤的精度等级必须在 `L1` 到 `L6` 之间。
-    *   **Executor 校验**：后置断言 `history` 最新回复中必须包含合法的置信度分数；并且，严禁越界读写非工作区敏感文件，维持文件访问路径的清白度。
-    *   **Auditor 校验**：后置断言审计通过时 `audit_feedback` 必须清空；若驳回，必须携带详实的驳回提示理由。
+    *   **Planner 校验**：前置断言 `mission` 对象必须包含合法的 `goal`。后置断言任务拆解池 `task_pool` 绝不能为空，且所有子步骤精度等级必须在 `L1` 到 `L6` 之间。
+    *   **Executor / Tools 校验**：`think` 前置要求 `task_pool` 与 `current_task_index` 合法；`execute_tools` 前置要求上一条消息必须带 `tool_calls`，后置要求历史必须追加 `ToolMessage`。
+    *   **RegisterStep 校验**：`register_step` 前置要求任务池与索引合法，后置确保索引不会产生负值。
+    *   **Auditor 校验**：后置断言若审计驳回则必须伴随可追踪的重试计数变化与修正反馈。
 
 ### 1.4 Token 滑动窗口剪裁机制 (HistoryPruner)
 *   **核心实现**: [app/mcp/graph.py](file:///Users/Shared/Workspace/Tars/TarsAgent/app/mcp/graph.py) 中的 `prune_history_messages`
@@ -65,13 +66,13 @@ graph TD
 *   **核心实现**: [app/mcp/graph.py](file:///Users/Shared/Workspace/Tars/TarsAgent/app/mcp/graph.py) 中的 `register_step_node`
 *   **设计细节**:
     对于极高风险、涉及代码生成或底层系统指令修改的精度为 `L6` (Strict Transactional) 的超复杂任务，THP 2.0 上线了**自动测试哨兵与自愈回路 (Auto-Testing & Self-Healing)**：
-    1.  **沙箱隔离执行**：Executor 在完成子步骤的代码编写后，框架在 `register_step_node` 节点拦截提交，在宿主隔离沙箱中自动寻找并拉起本地 pytest 测试套件。
+    1.  **沙箱隔离执行**：Executor 在完成子步骤的代码编写后，框架在 `register_step_node` 节点拦截提交，并执行可配置测试命令（`L6_SANDBOX_TEST_CMD`，默认 `.venv/bin/pytest -q`）。
     2.  **错误捕获与自愈**：如果 pytest 执行返回非零退出码（测试用例失败、语法错误或断言失效），系统拒绝将问题代码提交给审计员或用户，而是：
         *   **保持任务步进索引不变**；
-        *   **捕获 pytest 输出的 traceback 错误日志**，精简提取核心报错行；
-        *   **包装为特殊的 `SystemMessage` 错误哨兵回执**，强行喂回给 Executor。
+        *   **捕获测试输出 traceback 错误日志**，精简提取核心报错行；
+        *   **包装为特殊的 `SystemMessage` 错误哨兵回执**，并在下一轮 `think_node` 注入 `<l6_self_heal_feedback>`，确保报错真正被模型消费。
     3.  **闭环重试**：Executor 拿到精准的编译器/测试框架报错后，激活其自愈重构思考，在下一次迭代中精准重构代码，直至 pytest 完全返回 `100% 绿色通过` 后，子任务才被标记为 `completed` 并流转至 Auditor 审计。
-    4.  **优雅退避**：重愈回路最多执行 `MAX_EXECUTOR_RETRIES` (默认 3 次)。如果 3 次后仍未修复，说明遇到了复杂的第三方库或未定义环境，任务会降级交给 Auditor 并在必要时转为人机协同请求人类控制者介入，杜绝死循环。
+    4.  **优雅退避**：重愈回路最多执行 `MAX_EXECUTOR_RETRIES` (默认 3 次)。支持 `L6_SANDBOX_TEST_TIMEOUT` 自定义超时。若达到上限仍未修复，任务降级交给 Auditor 并在必要时转为人机协同介入，杜绝死循环。
 
 ### 1.6 成果脱壳提炼与双重防御机制 (Response Unwrapping)
 *   **核心实现**: [app/mcp/graph.py](file:///Users/Shared/Workspace/Tars/TarsAgent/app/mcp/graph.py) 中的 `reflect_node` 与 [app/agent.py](file:///Users/Shared/Workspace/Tars/TarsAgent/app/agent.py) 中的 `run` 提取逻辑。

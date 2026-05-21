@@ -49,6 +49,8 @@ graph LR
 ## 📖 相关文档
 - [WALKTHROUGH.md](./walkthrough.md): 记录了从 Legacy 到 MCP 的详细演变。
 - [MCP_GUIDE.md](./MCP_GUIDE.md): 开发者指南，教你如何为 Tars 编写新的 MCP Server。
+- [docs/HARNESS_ENGINEERING.md](./docs/HARNESS_ENGINEERING.md): THP 2.0 约束协议、节点不变量和 L6 自愈沙箱技术规范。
+- [docs/SAFETY_AND_HITL.md](./docs/SAFETY_AND_HITL.md): 双重纵深防御与人机协同(HITL)机制。
 - [CHANGELOG.md](./CHANGELOG.md): 版本变更历史。
 
 ---

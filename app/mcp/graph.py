@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import shlex
 import subprocess
 from typing import Dict, List, Any, Union
 from langgraph.graph import StateGraph, START, END
@@ -42,13 +43,35 @@ def verify_state_invariants(node_name: str, state: TarsState, is_post: bool = Fa
             task_pool = state.get("task_pool", [])
             if not task_pool:
                 raise AssertionError("THP Invariant Violate: Executor 'think' node requires a non-empty 'task_pool'")
-            if idx < 0:
+            if idx < 0 or idx >= len(task_pool):
                 raise AssertionError(f"THP Invariant Violate: Executor 'current_task_index' ({idx}) is out of bounds")
                 
     elif node_name == "execute_tools":
+        if not is_post:
+            if not state.get("history"):
+                raise AssertionError("THP Invariant Violate: execute_tools requires non-empty 'history'")
+            last = state["history"][-1]
+            if not isinstance(last, AIMessage) or not getattr(last, "tool_calls", None):
+                raise AssertionError("THP Invariant Violate: execute_tools requires last message to contain tool_calls")
         if is_post:
             if not state["history"]:
                 raise AssertionError("THP Invariant Violate: 'history' cannot be empty after execute_tools")
+            if not isinstance(state["history"][-1], ToolMessage):
+                raise AssertionError("THP Invariant Violate: execute_tools post-state must append ToolMessage outputs")
+
+    elif node_name == "register_step":
+        if not is_post:
+            task_pool = state.get("task_pool", [])
+            if not task_pool:
+                raise AssertionError("THP Invariant Violate: register_step requires non-empty 'task_pool'")
+            idx = state.get("current_task_index", 0)
+            if idx < 0 or idx >= len(task_pool):
+                raise AssertionError(f"THP Invariant Violate: register_step index ({idx}) is out of bounds")
+            if not state.get("history"):
+                raise AssertionError("THP Invariant Violate: register_step requires non-empty 'history'")
+        else:
+            if state.get("current_task_index", 0) < 0:
+                raise AssertionError("THP Invariant Violate: register_step cannot produce negative index")
                 
     elif node_name == "auditor":
         if is_post:
@@ -142,7 +165,7 @@ def parse_confidence(content: str) -> float:
     从 Executor 思考的 thought 文本中解析自评自信度得分。
     """
     if not content:
-        return 0.85  # 未匹配到时默认 0.85
+        return 0.75  # 未匹配到时默认 0.75
         
     content_stripped = content.strip()
     # 尝试 JSON 解析 (THP 2.0)
@@ -169,7 +192,7 @@ def parse_confidence(content: str) -> float:
         except ValueError:
             pass
             
-    return 0.85
+    return 0.75
 
 def prompt_user_intervention(tool_name: str, args: dict, confidence: float, threshold: float, warning_reason: str = "") -> bool:
     """
@@ -397,6 +420,18 @@ class TarsGraphBuilder:
         audit_context = ""
         if state.get("audit_feedback"):
             audit_context = f"\n\n<audit_feedback>\n【警告：前次审计被驳回，驳回理由为：】\n{state['audit_feedback']}\n请在执行此步骤时针对性修正。\n</audit_feedback>\n"
+
+        # L6 自愈反馈注入：让测试失败堆栈真正回流到下一轮 Executor 推理上下文
+        l6_heal_context = ""
+        for msg in reversed(state["history"]):
+            if isinstance(msg, SystemMessage) and "L6 Sandbox 自愈哨兵警告" in str(msg.content):
+                l6_heal_context = (
+                    "\n\n<l6_self_heal_feedback>\n"
+                    f"{msg.content}\n"
+                    "请优先根据上述测试失败日志修复当前步骤，再继续执行。\n"
+                    "</l6_self_heal_feedback>\n"
+                )
+                break
             
         precision_guidelines = {
             "L1": "L1 (EXPLORATORY_CONCEPT - 概念探索级)：此步骤为概念性探索或创作。无需物理事实，允许发散创意。你被明确允许彻底旁路任何物理工具调用。如果你的常识或记忆已足够，请直接总结输出结论，绝对禁止发起任何无用或占位性的工具调用。",
@@ -420,6 +455,7 @@ class TarsGraphBuilder:
             f"{memory_context or '（暂无前置步骤数据）'}\n"
             f"</shared_memory>\n"
             f"{audit_context}"
+            f"{l6_heal_context}"
             f"\n【IDAP 级别执行指南】:\n"
             f"{guideline}\n"
             f"\n【核心执行指导】:\n"
@@ -457,6 +493,7 @@ class TarsGraphBuilder:
     async def tool_node(self, state: TarsState) -> Dict[str, Any]:
         """物理执行节点"""
         logger.info("--- [NODE: EXECUTE_TOOLS] ---")
+        verify_state_invariants("execute_tools", state, is_post=False)
         last_message = state["history"][-1]
         
         tool_outputs = []
@@ -473,16 +510,16 @@ class TarsGraphBuilder:
                 
                 # 确定该工具的安全置信度阈值 (由环境变量动态配置，提供安全默认值)
                 try:
-                    base_threshold = float(os.getenv("BASE_CONFIDENCE_THRESHOLD", "0.85"))
+                    base_threshold = float(os.getenv("BASE_CONFIDENCE_THRESHOLD", "0.75"))
                 except ValueError:
-                    logger.warning("⚠️ 环境变量 BASE_CONFIDENCE_THRESHOLD 格式错误，使用默认值 0.85")
-                    base_threshold = 0.85
+                    logger.warning("⚠️ 环境变量 BASE_CONFIDENCE_THRESHOLD 格式错误，使用默认值 0.75")
+                    base_threshold = 0.75
 
                 try:
-                    terminal_threshold = float(os.getenv("TERMINAL_CONFIDENCE_THRESHOLD", "0.95"))
+                    terminal_threshold = float(os.getenv("TERMINAL_CONFIDENCE_THRESHOLD", "0.85"))
                 except ValueError:
-                    logger.warning("⚠️ 环境变量 TERMINAL_CONFIDENCE_THRESHOLD 格式错误，使用默认值 0.95")
-                    terminal_threshold = 0.95
+                    logger.warning("⚠️ 环境变量 TERMINAL_CONFIDENCE_THRESHOLD 格式错误，使用默认值 0.85")
+                    terminal_threshold = 0.85
 
                 active_threshold = base_threshold
                 if tool_name == "run_terminal_command":
@@ -539,10 +576,15 @@ class TarsGraphBuilder:
                     content=result
                 ))
         
-        return {"history": tool_outputs}
+        result = {"history": tool_outputs}
+        test_state = state.copy()
+        test_state["history"] = test_state["history"] + tool_outputs
+        verify_state_invariants("execute_tools", test_state, is_post=True)
+        return result
 
     async def register_step_node(self, state: TarsState) -> Dict[str, Any]:
         """登记当前步骤结果，进行事实蒸馏并推进指针"""
+        verify_state_invariants("register_step", state, is_post=False)
         idx = state.get("current_task_index", 0)
         task_pool = list(state.get("task_pool", []))
         if not task_pool:
@@ -556,19 +598,16 @@ class TarsGraphBuilder:
             logger.info("⚡ [L6 Sandbox] 触发 L6 严格事务级自检。正在自动拉起本地测试套件...")
             console.print("[bold yellow]⚡ [L6 Sandbox] 正在自动运行本地测试套件进行严格自检...[/bold yellow]")
             
-            pytest_bin = ".venv/bin/pytest"
-            if not os.path.exists(pytest_bin):
-                pytest_bin = "venv/bin/pytest"
-            if not os.path.exists(pytest_bin):
-                pytest_bin = "pytest"
+            test_cmd = os.getenv("L6_SANDBOX_TEST_CMD", ".venv/bin/pytest -q")
+            test_timeout = int(os.getenv("L6_SANDBOX_TEST_TIMEOUT", "60"))
                 
             try:
-                # 运行 pytest
+                # 运行可配置测试命令（默认快速模式）
                 process = subprocess.run(
-                    [pytest_bin],
+                    shlex.split(test_cmd),
                     capture_output=True,
                     text=True,
-                    timeout=30
+                    timeout=test_timeout
                 )
                 if process.returncode != 0:
                     retries = state.get("executor_retries", 0)
@@ -581,7 +620,7 @@ class TarsGraphBuilder:
                         # 记录自愈反馈并退回 think 节点
                         feedback_msg = (
                             f"【⚡ L6 Sandbox 自愈哨兵警告】：此步骤产出的代码在运行本地测试套件时失败。\n"
-                            f"【测试命令】：{pytest_bin}\n"
+                            f"【测试命令】：{test_cmd}\n"
                             f"【测试报错详情】：\n{process.stdout or process.stderr}\n"
                             f"请分析上述报错原因，并在此步骤下重新调用工具修正代码！"
                         )
@@ -615,11 +654,15 @@ class TarsGraphBuilder:
         next_idx = idx + 1
         logger.info(f"✅ 子任务 {idx+1}/{len(task_pool)} 已执行完成。数据已沉淀到 shared_memory，推进指针至: {next_idx}")
         
-        return {
+        result = {
             "task_pool": task_pool,
             "shared_memory": shared_memory,
             "current_task_index": next_idx
         }
+        test_state = state.copy()
+        test_state.update(result)
+        verify_state_invariants("register_step", test_state, is_post=True)
+        return result
 
     async def auditor_node(self, state: TarsState) -> Dict[str, Any]:
         """质量审计节点"""

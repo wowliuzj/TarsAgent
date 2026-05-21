@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.6.1] - 2026-05-21
+### 🧩 契约补强：自愈闭环修复、断言覆盖扩展与阈值口径统一
+
+#### 修复与优化
+- **L6 自愈闭环修复 (`app/mcp/graph.py`)**:
+  - 修复了 `register_step_node` 生成的 `L6 Sandbox 自愈哨兵` 反馈未被下一轮 `think_node` 消费的问题。
+  - 新增 `<l6_self_heal_feedback>` 注入链路，确保测试失败日志能真实回流给 Executor 进行针对性修复。
+- **节点不变量断言覆盖扩展 (`verify_state_invariants`)**:
+  - 将运行时前后置校验从 `planner/think/auditor` 扩展到 `execute_tools/register_step` 关键节点，增强状态机完整性保护。
+- **强类型契约收紧 (`app/mcp/state.py`)**:
+  - `SubTask.status` 与 `precision_level` 改为 `Literal` 限定。
+  - `AuditorVerdict.verdict` 改为 `Literal["approved", "rejected"]`。
+  - `ExecutorThought.confidence` 增加 `0.0~1.0` 数值边界约束。
+- **阈值默认值对齐与动态配置延续 (`app/mcp/graph.py` + `app/prompts.py`)**:
+  - 默认安全阈值对齐为：普通工具 `0.75`、终端工具 `0.85`。
+  - 继续支持通过 `BASE_CONFIDENCE_THRESHOLD` / `TERMINAL_CONFIDENCE_THRESHOLD` 环境变量动态覆盖。
+- **L6 自检命令可配置化 (`app/mcp/graph.py`)**:
+  - 新增 `L6_SANDBOX_TEST_CMD` 与 `L6_SANDBOX_TEST_TIMEOUT`，支持按环境自定义测试命令与超时时间。
+- **文档更新**:
+  - 更新 `README.md` 的文档导航，补充 Harness 与安全规范入口。
+  - 同步修订 `docs/HARNESS_ENGINEERING.md` 与 `docs/SAFETY_AND_HITL.md` 口径说明。
+
 ## [2.6.0] - 2026-05-21
 ### 🪐 契约立身：Tars 约束协议 2.0 (THP 2.0) 与 L6 高精密自愈沙箱上线
 Tars 2.0 迎来了软件工程级重大升级，正式落地多智能体强类型数据契约（Harness Engineering）、图节点级状态机双向不变量断言校验、动态 Token 上下文滑动窗口，以及 L6 精密事务的本地 pytest 自动测试与自愈重构回路。这标志着 Tars 从不确定的提示词调试阶段迈入了契约驱动的工程智能体时代。

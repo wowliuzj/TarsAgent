@@ -111,11 +111,11 @@ async def test_dynamic_confidence_thresholds(monkeypatch):
     kwargs = mock_prompt.call_args[1]
     assert kwargs["threshold"] == 0.99
     
-    # 3. 测试错误格式的情况，应优雅降级退避为默认值 0.85 / 0.95
+    # 3. 测试错误格式的情况，应优雅降级退避为默认值 0.75 / 0.85
     monkeypatch.setenv("BASE_CONFIDENCE_THRESHOLD", "invalid_float")
     mock_prompt.reset_mock()
     
-    # AI 评分 0.86，高于默认退避阈值 0.85，所以不应触发人机协同
+    # AI 评分 0.86，高于默认退避阈值 0.75，所以不应触发人机协同
     state_fallback = {
         "history": [
             AIMessage(content="Confidence: 0.86", tool_calls=[{

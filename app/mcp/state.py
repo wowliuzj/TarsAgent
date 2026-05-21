@@ -1,5 +1,5 @@
 import enum
-from typing import List, Dict, Any, Optional, Annotated
+from typing import List, Dict, Any, Optional, Annotated, Literal
 from pydantic import BaseModel, Field
 from langchain_core.messages import BaseMessage
 from typing_extensions import TypedDict
@@ -19,13 +19,13 @@ class Mission(BaseModel):
 class SubTask(BaseModel):
     id: str
     description: str
-    status: str = "pending" # pending, in_progress, completed, failed
+    status: Literal["pending", "in_progress", "completed", "failed"] = "pending"
     result: Optional[str] = None
-    precision_level: str = "L3"
+    precision_level: Literal["L1", "L2", "L3", "L4", "L5", "L6"] = "L3"
 
 class AuditEntry(BaseModel):
     node_name: str
-    decision: str # approved, rejected
+    decision: Literal["approved", "rejected"]
     reason: Optional[str] = None
 
 class PlannerOutput(BaseModel):
@@ -34,10 +34,10 @@ class PlannerOutput(BaseModel):
 
 class ExecutorThought(BaseModel):
     reasoning: str = Field(description="执行者的思考与工具调用推导")
-    confidence: float = Field(description="动作执行的自信度自评得分 (0.0 到 1.0)")
+    confidence: float = Field(ge=0.0, le=1.0, description="动作执行的自信度自评得分 (0.0 到 1.0)")
 
 class AuditorVerdict(BaseModel):
-    verdict: str = Field(description="审计判定结果，必须为 'approved' 或 'rejected'")
+    verdict: Literal["approved", "rejected"] = Field(description="审计判定结果，必须为 'approved' 或 'rejected'")
     reason: Optional[str] = Field(None, description="若是被驳回 (rejected)，必须写明具体具体的修正意见")
 
 class TarsState(TypedDict):

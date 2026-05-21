@@ -26,7 +26,7 @@ def test_planner_structured_output():
     assert parse_confidence(legacy_thought) == 0.92
     
     # 4. 验证默认兜底
-    assert parse_confidence("random string without anything") == 0.85
+    assert parse_confidence("random string without anything") == 0.75
 
 def test_state_assertions_invariants():
     """验证状态不变式 (Invariants) 校验"""
@@ -49,7 +49,8 @@ def test_state_assertions_invariants():
     # 2. 填充任务池但包含非法精度评级
     invalid_state = valid_state.copy()
     invalid_state["task_pool"] = [
-        SubTask(id="task_1", description="Build", precision_level="L9") # 非法评级
+        # 用 model_construct 绕过 Pydantic Literal 校验，专门测试 Invariant 断言逻辑
+        SubTask.model_construct(id="task_1", description="Build", precision_level="L9", status="pending", result=None)
     ]
     with pytest.raises(AssertionError, match="Invalid SubTask precision level 'L9'"):
         verify_state_invariants("planner", invalid_state, is_post=True)
@@ -268,4 +269,3 @@ async def test_response_unwrapping_double_defense():
     final_response = await agent.run("你好")
     # 验证输出已被剥离 JSON，还原为纯净的 reasoning 内容
     assert final_response == "【Tars 收到您的指令，执行中...】您好！很高兴为您服务。"
-

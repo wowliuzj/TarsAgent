@@ -23,11 +23,11 @@
 *   **核心实现**: [app/mcp/graph.py](file:///Users/Shared/Workspace/Tars/TarsAgent/app/mcp/graph.py)
 *   **设计细节**:
     *   **工作区物理大解放**：彻底排除了对 `read_file`、`write_file` 与 `list_files` 的强制路径物理重定向拦截，恢复了 Tars 自由检查和修改项目本身（如修改 `app/` 和 `tests/` 下的代码与配置）的生产力。
-    *   **置信度提取器**：通过 `parse_confidence` 稳健解析器，自动使用正则匹配 Executor 思考内容中的 `Confidence: <score>` 值（缺省默认为 `0.85`）。
+    *   **置信度提取器**：通过 `parse_confidence` 稳健解析器，优先兼容 THP 2.0 的 JSON 结构并向后兼容正则匹配（缺省默认为 `0.75`）。
     *   **高危指令拦截规则**：编写了 `check_command_risk` 对终端操作进行深度拦截判定：
         *   **绝对阻断 (Blocked)**：特权提升指令 (`sudo`/`su`)、泄露或操作敏感文件（如 `.env`, `.git`, `id_rsa`, `config.json` 等）、反弹监听/后门连接（如 `/dev/tcp`, `nc -l`, `netcat` 等）。此外，毁灭性删除核心代码或骨架目录（如 `rm -rf app`）直接进行绝对阻断。
         *   **人机确认 (Warning)**：对常规目录的递归强制删除（如 `rm -rf tmp/`）、权限修改（`chmod`/`chown`/`chgrp`）、敏感数据网络外传（`curl`/`wget` 带有 POST 或 form 等标志）。
-    *   **控制台精美 Rich Panel 交互**：当 Executor 的置信度低于当前工具激活的阈值线（普通工具默认 `0.85`，终端命令默认 `0.95`，均可通过 `.env` 中的环境变量 `BASE_CONFIDENCE_THRESHOLD` 与 `TERMINAL_CONFIDENCE_THRESHOLD` 进行动态配置与加载）或触发了高危指令警告时，在终端弹出精美的 **Rich Panel 警报面板** 并以 `Confirm.ask` 进行阻断或放行。
+    *   **控制台精美 Rich Panel 交互**：当 Executor 的置信度低于当前工具激活的阈值线（普通工具默认 `0.75`，终端命令默认 `0.85`，均可通过 `.env` 中的环境变量 `BASE_CONFIDENCE_THRESHOLD` 与 `TERMINAL_CONFIDENCE_THRESHOLD` 进行动态配置与加载）或触发了高危指令警告时，在终端弹出精美的 **Rich Panel 警报面板** 并以 `Confirm.ask` 进行阻断或放行。
     *   **自愈闭环**：若控制者手动拒绝授权，系统将友好报错信息回馈给 AI，驱动 Executor 在不崩溃连接的前提下，完美进行自我重规与自愈。
 
 ### 1.3 服务端物理绝对沙箱屏障 (Server-Side Sandbox Blockade)
