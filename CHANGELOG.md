@@ -18,8 +18,14 @@ Tars 2.0 迎来了软件工程级重大升级，正式落地多智能体强类�
 - **L6 高精密 Sandbox pytest 测试与自愈回路 (`register_step_node` in `app/mcp/graph.py`) [NEW]**:
   - 针对 precision 等级为 `L6` (高精度代码生成或系统修改) 的极端精密子任务，在节点提交前，自动在隔离物理沙箱内拉起 pytest 测试套件。
   - 一旦测试失败（退出码 != 0），框架强行锁定当前步进索引，并将 pytest traceback 报错日志以 System 反馈喂回 Executor，驱动智能体利用编译器报错精准进行自主代码重构，直至通过率 100% 绿色后才流转至 Auditor 审计。重试上限配置为 `MAX_EXECUTOR_RETRIES` (默认 3 次) 以优雅退避。
+- **成果脱壳提炼与双重防御机制 (Response Unwrapping) [NEW]**:
+  - **问题根源**：由于全局强制执行结构化输出（OpenAI Structured Outputs / 嵌套 JSON），导致在闲聊及极简对话场景中，AI 最终合成结果包含了内部调试 JSON（包含 `reasoning`, `confidence` 等字段），直接破坏了面向用户的最终界面纯净度。
+  - **双重纵深防御**：
+    1. *第一层 (快速通道直接旁路)*：在 `reflect_node` 进行快速旁路判定前，自动解析 `step_1_result` JSON，若符合协议则在内存中提取 `reasoning` 部分，恢复 `is_simple_chat` 标志位，直接绕过成果大合成，零 Token 消耗极速返回给用户。
+    2. *第二层 (兜底成果脱壳)*：在 `TarsAgent.run` 的尾部提取阶段部署兜底防御，自动检测并对倒序历史的 AIMessage 剥离 JSON 封皮提取 `reasoning`，实现底层严苛强契约通信与用户终端友好自然语言的完美解耦。
+  - **集成测试与回归保障**：在 `tests/test_harness_contracts.py` 中新增 `test_response_unwrapping_double_defense`，保证了两层脱壳逻辑的绝对稳健与 100% 回归成功。
 - **完备的集成契约测试集与规范文档 (`docs/HARNESS_ENGINEERING.md`) [NEW]**:
-  - 编写了详尽的高精度 Harness 约束协议设计规范书；在 `tests/test_harness_contracts.py` 中编写了覆盖强类型解析、不变量断言拦截、Token 滑动窗口剪裁、以及 L6 sandbox pytest 报错自愈回路的 6 大高品质集成单元测试，测试通过率 100%。
+  - 编写了详尽的高精度 Harness 约束协议设计规范书；在 `tests/test_harness_contracts.py` 中编写了覆盖强类型解析、不变量断言拦截、Token 滑动窗口剪裁、以及 L6 sandbox pytest 报错自愈回路的 7 大高品质集成单元测试，测试通过率 100%。
 
 ## [2.5.0] - 2026-05-20
 ### 🛡️ 稳如磐石：双重纵深防御安全红线与人机协同介入机制 (HITL & Sandbox)

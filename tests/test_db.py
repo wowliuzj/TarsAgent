@@ -19,13 +19,14 @@ def test_db_session_and_message_relationship(db_session: Session):
     db_session.add(msg2)
     db_session.commit()
     
-    # 3. 验证一对多关联查询
+    # 3. 验证一对多关联关系 (按 id 排序确保断言不因默认查询顺序抖动)
     db_session.refresh(session)
     assert len(session.messages) == 2
-    assert session.messages[0].role == "user"
-    assert session.messages[0].content == "Hi Tars!"
-    assert session.messages[1].role == "assistant"
-    assert session.messages[1].content == "Hello Human!"
+    messages_sorted = sorted(session.messages, key=lambda m: m.id or 0)
+    assert messages_sorted[0].role == "user"
+    assert messages_sorted[0].content == "Hi Tars!"
+    assert messages_sorted[1].role == "assistant"
+    assert messages_sorted[1].content == "Hello Human!"
 
 def test_mcp_tool_index_mapping(db_session: Session):
     """验证 MCPToolIndex 表结构映射，包括 JSONSchema 和 PGVector 高维数值的写入与查询。"""

@@ -71,7 +71,16 @@ class TarsAgent:
         final_response = "未能获取到回答。"
         for msg in reversed(final_state["history"]):
             if isinstance(msg, AIMessage) and not msg.tool_calls:
-                final_response = msg.content
+                content = msg.content.strip()
+                import json
+                try:
+                    data = json.loads(content)
+                    if isinstance(data, dict) and "reasoning" in data:
+                        final_response = data["reasoning"]
+                    else:
+                        final_response = msg.content
+                except Exception:
+                    final_response = msg.content
                 break
         
         return final_response

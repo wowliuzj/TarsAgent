@@ -73,6 +73,13 @@ graph TD
     3.  **闭环重试**：Executor 拿到精准的编译器/测试框架报错后，激活其自愈重构思考，在下一次迭代中精准重构代码，直至 pytest 完全返回 `100% 绿色通过` 后，子任务才被标记为 `completed` 并流转至 Auditor 审计。
     4.  **优雅退避**：重愈回路最多执行 `MAX_EXECUTOR_RETRIES` (默认 3 次)。如果 3 次后仍未修复，说明遇到了复杂的第三方库或未定义环境，任务会降级交给 Auditor 并在必要时转为人机协同请求人类控制者介入，杜绝死循环。
 
+### 1.6 成果脱壳提炼与双重防御机制 (Response Unwrapping)
+*   **核心实现**: [app/mcp/graph.py](file:///Users/Shared/Workspace/Tars/TarsAgent/app/mcp/graph.py) 中的 `reflect_node` 与 [app/agent.py](file:///Users/Shared/Workspace/Tars/TarsAgent/app/agent.py) 中的 `run` 提取逻辑。
+*   **设计细节**:
+    由于全局系统提示词 (`BASE_SYSTEM_PROMPT`) 强制要求所有智能体角色在 content 输出中遵循 `<confidence_protocol>` 并格式化为带有 `reasoning` 与 `confidence` 字段的 `ExecutorThought` JSON，这导致在不需要物理工具的简单闲聊/对话场景中，Tars 最终会向用户返回一个包含内部思考调试结构的 JSON 段，极大地破坏了人机交互的纯净度。为此，系统上线了**双重成果脱壳防御机制**：
+    1.  **第一层防御 (简单问答极速旁路)**：在 `reflect_node` 中，系统在判定闲聊对话 (`is_simple_chat`) 前，会自动对 `step_1_result` 进行尝试性 JSON 解析。如果其符合 `ExecutorThought` 协议，则在内存中**动态脱壳提取其真实的 `reasoning` 纯文本**再运行 simple chat 规则。使得单纯的自然语言打招呼可以直接绕过整合大模型合成阶段，零 Token 消耗、极速自然响应给使用者。
+    2.  **第二层防御 (合成输出兜底脱壳)**：在 `app/agent.py` 的最终输出回执提取节点，即使 Reflector 整合成果时因继承全局系统提示词而产出了 JSON 包装的内容，提取器在向控制台输出前，会自动识别并抓取 `reasoning` 的值，完美将机器内部协议与人类友好呈现进行了物理级双轴剥离，确保控制台拿到的永远是纯净、自然的成果大文章。
+
 ---
 
 ## 🧪 2. 约束规范单元验证
@@ -86,6 +93,7 @@ graph TD
     2.  `test_state_assertions_invariants`：验证 `verify_state_invariants` 函数。如果往 `TarsState` 中注入非法的子步骤数据（例如缺少 precision 评级，或越界操作了系统敏感路径），前后置断言能够立即精准识别并抛出 `AssertionError` 异常进行拦截。
     3.  `test_history_pruning_sliding`：验证 `prune_history_messages` 的上下文滑动切片逻辑。在注入包含几十个巨量 `ToolMessage` 回执的极端历史流中，剪裁器能精确剪掉冗余日志，且 100% 保留下 Mission 和 System 指导方针。
     4.  `test_l6_self_testing_healing_loop`：模拟了一个编写了错误代码的 `L6` 步骤。测试用例 Mock 了 pytest 执行失败的情况，验证框架是否能够安全地：保持 `current_task_index` 指针不向下滚动、自动计算 `executor_retries` 计数、将报错堆栈作为 System 反馈精准拼接到历史中，并触发下一次 Executor 的重规。
+    5.  `test_response_unwrapping_double_defense`：验证简单聊天或合成节点中，成果脱壳提炼与双重防御机制的有效性。确保在系统全局强制执行结构化 JSON 约束下，用户终端能且只能接收到纯净、自然的文字，绝不泄露任何系统底层协议的 JSON 封装。
 
 ---
 
@@ -102,18 +110,19 @@ graph TD
 platform darwin -- Python 3.13.13, pytest-9.0.3, pluggy-1.6.0
 rootdir: /Users/Shared/Workspace/Tars/TarsAgent
 plugins: asyncio-1.3.0, langsmith-0.8.5, anyio-4.13.0
-collected 6 items
+collected 7 items
 
-tests/test_harness_contracts.py::test_planner_structured_output PASSED   [ 16%]
-tests/test_harness_contracts.py::test_state_assertions_invariants PASSED [ 33%]
-tests/test_harness_contracts.py::test_history_pruning_sliding PASSED     [ 50%]
-tests/test_harness_contracts.py::test_planner_node_structured_parsing PASSED [ 66%]
-tests/test_harness_contracts.py::test_auditor_node_structured_parsing PASSED [ 83%]
-tests/test_harness_contracts.py::test_l6_self_testing_healing_loop PASSED [100%]
+tests/test_harness_contracts.py::test_planner_structured_output PASSED   [ 14%]
+tests/test_harness_contracts.py::test_state_assertions_invariants PASSED [ 28%]
+tests/test_harness_contracts.py::test_history_pruning_sliding PASSED     [ 42%]
+tests/test_harness_contracts.py::test_planner_node_structured_parsing PASSED [ 57%]
+tests/test_harness_contracts.py::test_auditor_node_structured_parsing PASSED [ 71%]
+tests/test_harness_contracts.py::test_l6_self_testing_healing_loop PASSED [ 85%]
+tests/test_harness_contracts.py::test_response_unwrapping_double_defense PASSED [100%]
 
-============================== 6 passed in 0.12s ===============================
+============================== 7 passed in 2.13s ===============================
 ```
-自动化约束契约测试 100% 通过，在极速（0.12s）中完成了所有核心安全逻辑校验。
+自动化约束契约测试 100% 通过，在极速（约 2s）中完成了所有核心安全逻辑校验。
 
 ---
 

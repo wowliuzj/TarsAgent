@@ -706,16 +706,28 @@ class TarsGraphBuilder:
         # (只有 1 个子任务，且输出为非 JSON、不含技术 key 的纯文字直接回复)
         # 如果是，则绕过 LLM 整合合成，直接以最自然的形式返回给使用者，杜绝官僚形式的“最终报告”。
         step_1_val = shared_mem.get("step_1_result", "")
+        
+        # 尝试剥离 ExecutorThought 的 JSON 壳以获得实际的回复内容
+        actual_val = step_1_val
+        import json
+        if isinstance(step_1_val, str) and step_1_val.strip().startswith("{"):
+            try:
+                data = json.loads(step_1_val)
+                if isinstance(data, dict) and "reasoning" in data:
+                    actual_val = data["reasoning"]
+            except Exception:
+                pass
+
         is_simple_chat = False
-        if len(state.get("task_pool", [])) <= 1 and isinstance(step_1_val, str) and step_1_val.strip():
-            step_1_stripped = step_1_val.strip()
-            is_json = (step_1_stripped.startswith("{") and step_1_stripped.endswith("}")) or (step_1_stripped.startswith("[") and step_1_stripped.endswith("]"))
-            has_tech_keys = any(k in step_1_val for k in ['"stdout":', '"stderr":', '"status":', '"script_written":', '"saved_markdown_path":'])
+        if len(state.get("task_pool", [])) <= 1 and isinstance(actual_val, str) and actual_val.strip():
+            actual_stripped = actual_val.strip()
+            is_json = (actual_stripped.startswith("{") and actual_stripped.endswith("}")) or (actual_stripped.startswith("[") and actual_stripped.endswith("]"))
+            has_tech_keys = any(k in actual_val for k in ['"stdout":', '"stderr":', '"status":', '"script_written":', '"saved_markdown_path":'])
             if not is_json and not has_tech_keys:
                 is_simple_chat = True
                 
         if is_simple_chat:
-            final_content = step_1_val.strip()
+            final_content = actual_val.strip()
             prefix = "【Tars 收到您的指令，执行中...】"
             if not final_content.startswith(prefix):
                 final_content = prefix + final_content

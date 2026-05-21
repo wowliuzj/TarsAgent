@@ -212,3 +212,60 @@ async def test_l6_self_testing_healing_loop():
         assert res["executor_retries"] == 1
         assert "L6 Sandbox 自愈哨兵警告" in res["history"][0].content
         assert "FAIL: test_assert_error" in res["history"][0].content
+
+@pytest.mark.asyncio
+async def test_response_unwrapping_double_defense():
+    """验证简单聊天或合成节点中，成果脱壳提炼与双重防御机制的有效性"""
+    # 1. 验证 reflect_node 能正确脱壳 JSON 并激活闲聊直接通道 (is_simple_chat = True)
+    mock_agent = MagicMock()
+    builder = TarsGraphBuilder(agent_instance=mock_agent)
+    
+    # 模拟 step_1_result 是一个带 reasoning 的 JSON string (Executor 强制结构化输出的结果)
+    json_result = json.dumps({
+        "reasoning": "【Tars 收到您的指令，执行中...】今天天气真好，祝您开心！",
+        "confidence": 0.98
+    })
+    
+    state: TarsState = {
+        "mission": Mission(id="m_1", goal="今天天气怎么样？"),
+        "history": [HumanMessage(content="今天天气怎么样？")],
+        "shared_memory": {"step_1_result": json_result},
+        "task_pool": [SubTask(id="task_1", description="闲聊问答", precision_level="L1")],
+        "current_task_index": 1,
+        "executor_retries": 0,
+        "planner_retries": 0,
+        "audit_feedback": ""
+    }
+    
+    res = await builder.reflect_node(state)
+    final_msg = res["history"][0]
+    
+    # 验证确实绕过了 LLM 成果整合合成，直接剥离了 JSON 壳，返回了纯净文本
+    assert "今天天气真好，祝您开心！" in final_msg.content
+    assert "{" not in final_msg.content
+    assert "reasoning" not in final_msg.content
+
+    # 2. 验证 app/agent.py 中的 TarsAgent.run 能正确脱壳合成终点的 JSON 兜底
+    from app.agent import TarsAgent
+    agent = TarsAgent(session_id=123)
+    
+    # 模拟 final_state 的 history 尾部是一个强行输出的 JSON AIMessage
+    from langchain_core.messages import AIMessage
+    mock_final_state = {
+        "history": [
+            HumanMessage(content="你好"),
+            AIMessage(content=json.dumps({
+                "reasoning": "【Tars 收到您的指令，执行中...】您好！很高兴为您服务。",
+                "confidence": 0.95
+            }))
+        ]
+    }
+    
+    # Mock graph.ainvoke 返回模拟状态
+    agent.graph = MagicMock()
+    agent.graph.ainvoke = AsyncMock(return_value=mock_final_state)
+    
+    final_response = await agent.run("你好")
+    # 验证输出已被剥离 JSON，还原为纯净的 reasoning 内容
+    assert final_response == "【Tars 收到您的指令，执行中...】您好！很高兴为您服务。"
+
