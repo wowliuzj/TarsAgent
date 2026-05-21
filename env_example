@@ -37,7 +37,7 @@ WORKSPACE_DIR=data
 ALL_PROXY=http://127.0.0.1:7890
 
 # --- 安全置信度阈值配置 ---
-# 普通工具自评分安全置信阈值 (默认 0.85)
-BASE_CONFIDENCE_THRESHOLD=0.85
-# 终端执行命令安全置信值 (默认 0.95)
-TERMINAL_CONFIDENCE_THRESHOLD=0.95
+# 普通工具自评分安全置信阈值 (默认 0.75)
+BASE_CONFIDENCE_THRESHOLD=0.75
+# 终端执行命令安全置信值 (默认 0.85)
+TERMINAL_CONFIDENCE_THRESHOLD=0.85

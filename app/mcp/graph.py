@@ -508,18 +508,27 @@ class TarsGraphBuilder:
                 args = dict(tool_call["args"])  # Copy args to allow modification
                 logger.info(f"[*] MCP 调用: {tool_name}({args})")
                 
-                # 确定该工具的安全置信度阈值 (由环境变量动态配置，提供安全默认值)
+                # 确定该工具的安全置信度阈值 (由环境变量动态配置)
                 try:
-                    base_threshold = float(os.getenv("BASE_CONFIDENCE_THRESHOLD", "0.75"))
+                    base_threshold = float(os.environ["BASE_CONFIDENCE_THRESHOLD"])
+                    terminal_threshold = float(os.environ["TERMINAL_CONFIDENCE_THRESHOLD"])
+                except KeyError as e:
+                    missing_key = str(e).strip("'")
+                    logger.error(f"❌ 安全阻断: 缺失必要阈值配置 {missing_key}")
+                    result = f"【安全阻断：系统缺失必要的安全阈值配置 `{missing_key}`。请先在 .env 中配置完整后再执行。】"
+                    tool_outputs.append(ToolMessage(
+                        tool_call_id=tool_call["id"],
+                        content=result
+                    ))
+                    continue
                 except ValueError:
-                    logger.warning("⚠️ 环境变量 BASE_CONFIDENCE_THRESHOLD 格式错误，使用默认值 0.75")
-                    base_threshold = 0.75
-
-                try:
-                    terminal_threshold = float(os.getenv("TERMINAL_CONFIDENCE_THRESHOLD", "0.85"))
-                except ValueError:
-                    logger.warning("⚠️ 环境变量 TERMINAL_CONFIDENCE_THRESHOLD 格式错误，使用默认值 0.85")
-                    terminal_threshold = 0.85
+                    logger.error("❌ 安全阻断: 安全阈值配置格式非法")
+                    result = "【安全阻断：检测到 BASE_CONFIDENCE_THRESHOLD 或 TERMINAL_CONFIDENCE_THRESHOLD 格式非法，请修复 .env 后重试。】"
+                    tool_outputs.append(ToolMessage(
+                        tool_call_id=tool_call["id"],
+                        content=result
+                    ))
+                    continue
 
                 active_threshold = base_threshold
                 if tool_name == "run_terminal_command":
