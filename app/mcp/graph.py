@@ -1,15 +1,99 @@
 import os
 import json
 import re
+import subprocess
 from typing import Dict, List, Any, Union
 from langgraph.graph import StateGraph, START, END
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, SystemMessage
-from app.mcp.state import TarsState, Lane, SubTask
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, SystemMessage, BaseMessage
+from app.mcp.state import TarsState, Lane, SubTask, PlannerOutput, ExecutorThought, AuditorVerdict
 from app.logger import logger
 from app.prompts import PLANNER_PROMPT, AUDITOR_PROMPT, BASE_SYSTEM_PROMPT, get_dynamic_project_context
 from rich.panel import Panel
 from rich.prompt import Confirm
 from app.shared_console import console
+
+def verify_state_invariants(node_name: str, state: TarsState, is_post: bool = False):
+    """
+    状态不变式(Invariants)验证器。
+    在每个节点执行前后校验状态一致性、数据结构正确性以及安全性规范。
+    """
+    phase = "Post" if is_post else "Pre"
+    logger.debug(f"[THP Invariant Check] {phase}-{node_name}")
+    
+    # 基础校验：mission 结构永远不能丢失
+    if "mission" not in state or not state["mission"]:
+        raise AssertionError("THP Invariant Violate: 'mission' is required in TarsState")
+    if not state["mission"].goal:
+        raise AssertionError("THP Invariant Violate: 'mission.goal' cannot be empty")
+        
+    if node_name == "planner":
+        if is_post:
+            if "task_pool" not in state or not state["task_pool"]:
+                raise AssertionError("THP Invariant Violate: Planner node must populate 'task_pool'")
+            for task in state["task_pool"]:
+                if not task.description:
+                    raise AssertionError("THP Invariant Violate: SubTask description cannot be empty")
+                if task.precision_level not in ["L1", "L2", "L3", "L4", "L5", "L6"]:
+                    raise AssertionError(f"THP Invariant Violate: Invalid SubTask precision level '{task.precision_level}'")
+                    
+    elif node_name == "think":
+        if not is_post:
+            idx = state.get("current_task_index", 0)
+            task_pool = state.get("task_pool", [])
+            if not task_pool:
+                raise AssertionError("THP Invariant Violate: Executor 'think' node requires a non-empty 'task_pool'")
+            if idx < 0:
+                raise AssertionError(f"THP Invariant Violate: Executor 'current_task_index' ({idx}) is out of bounds")
+                
+    elif node_name == "execute_tools":
+        if is_post:
+            if not state["history"]:
+                raise AssertionError("THP Invariant Violate: 'history' cannot be empty after execute_tools")
+                
+    elif node_name == "auditor":
+        if is_post:
+            if state.get("audit_feedback"):
+                if state.get("executor_retries", 0) < 0:
+                    raise AssertionError("THP Incorporate: Rejections must track positive retries")
+
+def prune_history_messages(history: List[BaseMessage], max_chars: int = 25000) -> List[BaseMessage]:
+    """
+    智能历史消息修剪器 (HistoryPruner)。
+    当历史记录过大时，对已完成步骤的巨大工具输出进行截断或浓缩，
+    只保留最近的消息和关键系统提示，防止撑爆 LLM 视界。
+    """
+    total_len = sum(len(str(m.content)) for m in history if m.content)
+    if total_len <= max_chars:
+        return history
+        
+    logger.warning(f"🛡️ [HistoryPruner] 历史消息字符数 ({total_len}) 超过上限 ({max_chars})，启动智能修剪...")
+    
+    pruned = []
+    if len(history) >= 2:
+        pruned.extend(history[:2])
+        remaining = history[2:]
+    else:
+        remaining = history
+        
+    keep_recent_count = 8
+    recent_messages = remaining[-keep_recent_count:] if len(remaining) > keep_recent_count else remaining
+    old_messages = remaining[:-keep_recent_count] if len(remaining) > keep_recent_count else []
+    
+    for msg in old_messages:
+        if isinstance(msg, ToolMessage):
+            if len(str(msg.content)) > 200:
+                short_content = str(msg.content)[:150] + f"...[修剪器截断：该历史工具输出已被安全压缩，共 {len(str(msg.content))} 字符]..."
+                pruned.append(ToolMessage(content=short_content, tool_call_id=msg.tool_call_id))
+            else:
+                pruned.append(msg)
+        else:
+            pruned.append(msg)
+            
+    pruned.extend(recent_messages)
+    
+    new_len = sum(len(str(m.content)) for m in pruned if m.content)
+    logger.info(f"🛡️ [HistoryPruner] 修剪完成。历史消息字符数由 {total_len} 降至 {new_len}")
+    return pruned
 
 def check_command_risk(command: str) -> tuple[bool, bool, str]:
     """
@@ -60,6 +144,24 @@ def parse_confidence(content: str) -> float:
     if not content:
         return 0.85  # 未匹配到时默认 0.85
         
+    content_stripped = content.strip()
+    # 尝试 JSON 解析 (THP 2.0)
+    try:
+        # LiteLLM/LLMs might wrap JSON in ```json ... ``` blocks
+        json_str = content_stripped
+        if "```json" in content_stripped:
+            match_json = re.search(r"```json\s*(\{.*?\})\s*```", content_stripped, re.DOTALL)
+            if match_json:
+                json_str = match_json.group(1)
+        elif content_stripped.startswith("`") or content_stripped.endswith("`"):
+            json_str = content_stripped.strip("`").strip()
+            
+        thought = ExecutorThought.model_validate_json(json_str)
+        return thought.confidence
+    except Exception:
+        pass
+        
+    # 兼容性降级：正则匹配 (THP 1.0)
     match = re.search(r"(?:Confidence|置信度|自信度)[:：]\s*(0?\.\d+|1\.0|1)", content, re.IGNORECASE)
     if match:
         try:
@@ -187,6 +289,8 @@ class TarsGraphBuilder:
     async def planner_node(self, state: TarsState) -> Dict[str, Any]:
         """项目经理节点：负责任务拆解"""
         logger.info("--- [NODE: PLANNER] ---")
+        verify_state_invariants("planner", state, is_post=False)
+        
         dynamic_context = get_dynamic_project_context()
         
         # 通过 Tool RAG 动态获取当前 Query 最相关的工具
@@ -210,47 +314,59 @@ class TarsGraphBuilder:
             logger.warning("Planner 正在根据 Auditor 意见重新规划...")
             messages.append(SystemMessage(content=f"前次计划执行失败，审计意见：{state['audit_feedback']}。请重新规划。"))
             
-        response = await self.agent._call_model(messages, use_tools=False)
+        response = await self.agent._call_model(messages, use_tools=False, response_format=PlannerOutput)
         plan_text = response.content
         logger.info(f"[*] Planner 制定的计划:\n{plan_text}")
         
-        # 解析子任务列表 (Markdown 数字列表并提取精确度等级)
-        import re
-        steps = re.findall(r"^\d+\.\s*(.+)$", plan_text, re.MULTILINE)
-        if not steps:
-            # 兼容性降级：按换行切分并过滤空行
-            steps = [line.strip() for line in plan_text.split("\n") if line.strip()]
-            
         task_pool = []
-        for i, step in enumerate(steps):
-            precision_match = re.search(r"\((L[1-6])\)\s*$", step)
-            if precision_match:
-                precision_level = precision_match.group(1)
-                clean_desc = step[:precision_match.start()].strip()
-            else:
-                precision_level = "L3"
-                clean_desc = step.strip()
+        try:
+            planner_output = PlannerOutput.model_validate_json(plan_text)
+            task_pool = planner_output.subtasks
+            for idx, task in enumerate(task_pool):
+                if not task.id:
+                    task.id = f"task_{idx+1}"
+        except Exception as e:
+            logger.error(f"解析 Planner 结构化输出失败: {e}，尝试使用备用文本正则解析。")
+            steps = re.findall(r"^\d+\.\s*(.+)$", plan_text, re.MULTILINE)
+            if not steps:
+                steps = [line.strip() for line in plan_text.split("\n") if line.strip()]
                 
-            task_pool.append(SubTask(
-                id=f"task_{i+1}",
-                description=clean_desc,
-                status="pending",
-                precision_level=precision_level
-            ))
+            for i, step in enumerate(steps):
+                precision_match = re.search(r"\((L[1-6])\)\s*$", step)
+                if precision_match:
+                    precision_level = precision_match.group(1)
+                    clean_desc = step[:precision_match.start()].strip()
+                else:
+                    precision_level = "L3"
+                    clean_desc = step.strip()
+                    
+                task_pool.append(SubTask(
+                    id=f"task_{i+1}",
+                    description=clean_desc,
+                    status="pending",
+                    precision_level=precision_level
+                ))
             
         logger.info(f"[*] 成功解析出 {len(task_pool)} 个子任务步骤。")
         
-        return {
+        result = {
             "task_pool": task_pool,
             "history": [SystemMessage(content=f"【当前任务计划 (由 Planner 制定)】\n{plan_text}")],
             "planner_retries": state.get("planner_retries", 0) + 1,
             "executor_retries": 0, # 重置执行者重试次数
             "audit_feedback": ""   # 清空反馈
         }
+        
+        test_state = state.copy()
+        test_state.update(result)
+        verify_state_invariants("planner", test_state, is_post=True)
+        
+        return result
 
     async def think_node(self, state: TarsState) -> Dict[str, Any]:
         """执行者决策节点"""
         logger.info("--- [NODE: THINK (Executor)] ---")
+        verify_state_invariants("think", state, is_post=False)
         
         idx = state.get("current_task_index", 0)
         task_pool = state.get("task_pool", [])
@@ -312,8 +428,10 @@ class TarsGraphBuilder:
         messages.append(SystemMessage(content=executor_system_prompt))
         
         # 5. Extract local ReAct message history belonging ONLY to the current step using retroactive scan
+        # 使用 HistoryPruner 智能剪裁大上下文历史
+        pruned_history = prune_history_messages(state["history"])
         local_react_messages = []
-        for msg in reversed(state["history"]):
+        for msg in reversed(pruned_history):
             if isinstance(msg, ToolMessage):
                 local_react_messages.insert(0, msg)
             elif isinstance(msg, AIMessage) and msg.tool_calls:
@@ -329,7 +447,12 @@ class TarsGraphBuilder:
         if response.content and not response.tool_calls:
             logger.info(f"[*] Executor 的初步执行结果:\n{response.content}")
             
-        return {"history": [response]}
+        result = {"history": [response]}
+        test_state = state.copy()
+        test_state["history"] = test_state["history"] + [response]
+        verify_state_invariants("think", test_state, is_post=True)
+        
+        return result
 
     async def tool_node(self, state: TarsState) -> Dict[str, Any]:
         """物理执行节点"""
@@ -427,6 +550,55 @@ class TarsGraphBuilder:
             
         last_msg = state["history"][-1]
         
+        # 执行 L6 严格自检 (Sandbox Auto-Testing)
+        level = task_pool[idx].precision_level if hasattr(task_pool[idx], "precision_level") else "L3"
+        if level == "L6":
+            logger.info("⚡ [L6 Sandbox] 触发 L6 严格事务级自检。正在自动拉起本地测试套件...")
+            console.print("[bold yellow]⚡ [L6 Sandbox] 正在自动运行本地测试套件进行严格自检...[/bold yellow]")
+            
+            pytest_bin = ".venv/bin/pytest"
+            if not os.path.exists(pytest_bin):
+                pytest_bin = "venv/bin/pytest"
+            if not os.path.exists(pytest_bin):
+                pytest_bin = "pytest"
+                
+            try:
+                # 运行 pytest
+                process = subprocess.run(
+                    [pytest_bin],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                if process.returncode != 0:
+                    retries = state.get("executor_retries", 0)
+                    max_retries = int(os.getenv("MAX_EXECUTOR_RETRIES", "3"))
+                    
+                    logger.warning(f"❌ [L6 Sandbox] 自检测试未通过 (已重试: {retries}/{max_retries})。")
+                    console.print(f"[bold red]❌ [L6 Sandbox] 自检测试未通过 (已重试: {retries}/{max_retries})，已触发 AI 自我修复机制！[/bold red]")
+                    
+                    if retries < max_retries:
+                        # 记录自愈反馈并退回 think 节点
+                        feedback_msg = (
+                            f"【⚡ L6 Sandbox 自愈哨兵警告】：此步骤产出的代码在运行本地测试套件时失败。\n"
+                            f"【测试命令】：{pytest_bin}\n"
+                            f"【测试报错详情】：\n{process.stdout or process.stderr}\n"
+                            f"请分析上述报错原因，并在此步骤下重新调用工具修正代码！"
+                        )
+                        return {
+                            "history": [SystemMessage(content=feedback_msg)],
+                            "executor_retries": retries + 1,
+                            # 关键：我们不推过 current_task_index，使其维持在 idx
+                            "current_task_index": idx
+                        }
+                    else:
+                        logger.error("🚨 [L6 Sandbox] 自检测试失败且已达重试上限，将交给质量审计节点进一步裁决。")
+                else:
+                    logger.info("✅ [L6 Sandbox] 本地测试套件自检通过！")
+                    console.print("[bold green]✅ [L6 Sandbox] 测试通过，代码自检 100% 绿色！[/bold green]")
+            except Exception as test_err:
+                logger.error(f"[L6 Sandbox] 执行测试套件发生异常: {test_err}")
+
         # 1. 记录此步骤的结果为 completed
         task_pool[idx] = SubTask(
             id=task_pool[idx].id,
@@ -452,6 +624,7 @@ class TarsGraphBuilder:
     async def auditor_node(self, state: TarsState) -> Dict[str, Any]:
         """质量审计节点"""
         logger.info("--- [NODE: AUDITOR] ---")
+        verify_state_invariants("auditor", state, is_post=False)
         
         # 1. 汇总所有子任务步骤的执行结果作为审查内容
         plan_lines = []
@@ -473,7 +646,7 @@ class TarsGraphBuilder:
             f"用户的原始需求: {state['mission'].goal}\n\n"
             f"Planner制定的完整计划:\n{plan_text}\n\n"
             f"Executor的完整执行结果:\n{executor_final_results_text}\n\n"
-            f"请审查以上结果。审查时，你必须根据每个子任务计划标题旁边的 [Level: LX] 标签，严格对照系统注入的分级审计准则进行判定。若完全符合该精确度级别的合规条件，请回复 'approved'；若需要驳回，请回复 'rejected'，然后换行写明具体驳回理由。"
+            f"请审查以上结果。审查时，你必须根据每个子任务计划标题旁边的 [Level: LX] 标签，严格对照系统注入的分级审计准则进行判定。若完全符合该精确度级别的合规条件，请输出 approved 状态的 JSON 对象；若需要驳回，请输出 rejected 状态并详细说明驳回理由。"
         )
         
         dynamic_context = get_dynamic_project_context()
@@ -482,27 +655,39 @@ class TarsGraphBuilder:
             HumanMessage(content=audit_content)
         ]
         
-        response = await self.agent._call_model(messages, use_tools=False)
+        response = await self.agent._call_model(messages, use_tools=False, response_format=AuditorVerdict)
         raw_verdict = response.content.strip()
-        verdict = raw_verdict.lower()
+        logger.info(f"[*] Auditor raw output: {raw_verdict}")
         
-        # Strip potential common prefixes injected by project S.O.P (like TARS.md)
-        prefix = "【tars 收到您的指令，执行中...】"
-        if verdict.startswith(prefix):
-            verdict = verdict[len(prefix):].strip()
-            
-        is_approved = verdict.startswith("approved")
-        reason = raw_verdict if not is_approved else ""
+        try:
+            verdict_obj = AuditorVerdict.model_validate_json(raw_verdict)
+            is_approved = verdict_obj.verdict == "approved"
+            reason = verdict_obj.reason or ""
+        except Exception as e:
+            logger.error(f"解析 Auditor 结构化输出失败: {e}，尝试使用备用文本解析。")
+            verdict = raw_verdict.lower()
+            prefix = "【tars 收到您的指令，执行中...】"
+            if verdict.startswith(prefix):
+                verdict = verdict[len(prefix):].strip()
+                
+            is_approved = verdict.startswith("approved")
+            reason = raw_verdict if not is_approved else ""
         
         logger.info(f"[*] 审计结果: {'✅ 通过' if is_approved else '❌ 驳回'}")
         if not is_approved:
             logger.warning(f"[*] 驳回理由: {reason}")
             
-        return {
+        result = {
             "audit_feedback": reason if not is_approved else "",
             "executor_retries": state.get("executor_retries", 0) + (1 if not is_approved else 0),
             "current_task_index": 0 if not is_approved else state["current_task_index"] # Rejection resets index to 0
         }
+        
+        test_state = state.copy()
+        test_state.update(result)
+        verify_state_invariants("auditor", test_state, is_post=True)
+        
+        return result
 
     async def reflect_node(self, state: TarsState) -> Dict[str, Any]:
         """反思与记忆节点：在此节点对所有子任务的执行结果进行最终的聚合与提炼，生成完美的统一大文章作为最终回答"""

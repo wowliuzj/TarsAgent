@@ -28,6 +28,18 @@ class AuditEntry(BaseModel):
     decision: str # approved, rejected
     reason: Optional[str] = None
 
+class PlannerOutput(BaseModel):
+    reasoning: str = Field(description="PM的规划与任务拆解思考过程")
+    subtasks: List[SubTask] = Field(description="拆解出的具体子任务列表，带精度评级 (L1-L6)")
+
+class ExecutorThought(BaseModel):
+    reasoning: str = Field(description="执行者的思考与工具调用推导")
+    confidence: float = Field(description="动作执行的自信度自评得分 (0.0 到 1.0)")
+
+class AuditorVerdict(BaseModel):
+    verdict: str = Field(description="审计判定结果，必须为 'approved' 或 'rejected'")
+    reason: Optional[str] = Field(None, description="若是被驳回 (rejected)，必须写明具体具体的修正意见")
+
 class TarsState(TypedDict):
     """Tars Harness Protocol (THP) 兼容的状态定义"""
     

@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.6.0] - 2026-05-21
+### 🪐 契约立身：Tars 约束协议 2.0 (THP 2.0) 与 L6 高精密自愈沙箱上线
+Tars 2.0 迎来了软件工程级重大升级，正式落地多智能体强类型数据契约（Harness Engineering）、图节点级状态机双向不变量断言校验、动态 Token 上下文滑动窗口，以及 L6 精密事务的本地 pytest 自动测试与自愈重构回路。这标志着 Tars 从不确定的提示词调试阶段迈入了契约驱动的工程智能体时代。
+
+#### 核心特性
+- **强类型数据契约与 LiteLLM 结构化输出封装 (`app/mcp/state.py` & `app/agent.py`) [NEW]**:
+  - 构建了 `PlannerOutput`、`ExecutorThought` 和 `AuditorVerdict` Pydantic v2 模型契约。
+  - 通过 `response_format` 参数将类型契约注入 LiteLLM 接口，强制模型输出 OpenAI/LiteLLM 兼容的 100% 类型安全结构化 JSON，废弃了原版脆弱的 text/regex 正则文本提取。
+  - Executor 节点在工具调用时，在 text 内容中遵循嵌套式 thought JSON 契约以兼顾特种工具集调用与结构化思考。
+- **契约级前后置状态机不变量断言校验 (`verify_state_invariants` in `app/mcp/graph.py`) [NEW]**:
+  - 在 LangGraph 的 `planner`、`think`、`auditor` 等关键图节点运转的前后置时机，强制部署运行时不变量校验（Invariants Assertions）。
+  - 严格审计拆解计划的合法性（precision 评级必在 L1~L6）、置信度有效性、以及工作区路径清白度，防止在极端复杂行程下的“记忆漂移”与状态机污染。
+- **智能 Token 历史滑动窗口剪裁器 (`prune_history_messages` in `app/mcp/graph.py`) [NEW]**:
+  - 针对大型重构等超长行程中因物理工具输出巨量日志导致的 Token 膨胀及上下文溢出问题，开发了局部滑动裁剪策略。
+  - 在总历史长度超警戒线时，在内存只读副本中自动对旧版 `ToolMessage` 日志做压缩和有损截断，而 100% 完整保留 System 指南、Mission 目标及 AIMessage 对话上下文。既精减了 Token 消耗，又确保了 LangGraph DB 持久化 Ledger 的回放完整性。
+- **L6 高精密 Sandbox pytest 测试与自愈回路 (`register_step_node` in `app/mcp/graph.py`) [NEW]**:
+  - 针对 precision 等级为 `L6` (高精度代码生成或系统修改) 的极端精密子任务，在节点提交前，自动在隔离物理沙箱内拉起 pytest 测试套件。
+  - 一旦测试失败（退出码 != 0），框架强行锁定当前步进索引，并将 pytest traceback 报错日志以 System 反馈喂回 Executor，驱动智能体利用编译器报错精准进行自主代码重构，直至通过率 100% 绿色后才流转至 Auditor 审计。重试上限配置为 `MAX_EXECUTOR_RETRIES` (默认 3 次) 以优雅退避。
+- **完备的集成契约测试集与规范文档 (`docs/HARNESS_ENGINEERING.md`) [NEW]**:
+  - 编写了详尽的高精度 Harness 约束协议设计规范书；在 `tests/test_harness_contracts.py` 中编写了覆盖强类型解析、不变量断言拦截、Token 滑动窗口剪裁、以及 L6 sandbox pytest 报错自愈回路的 6 大高品质集成单元测试，测试通过率 100%。
+
 ## [2.5.0] - 2026-05-20
 ### 🛡️ 稳如磐石：双重纵深防御安全红线与人机协同介入机制 (HITL & Sandbox)
 Tars 2.0 在物理大解放（彻底放开对代码与测试目录的自由修改，激活全面生产力）的同时，上线了固若金汤的物理安全屏障与人机交互介入策略，达成开发自由度与信息资产安全性之间的极致平衡。

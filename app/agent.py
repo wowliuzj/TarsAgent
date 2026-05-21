@@ -2,8 +2,9 @@ import os
 import json
 import uuid
 import asyncio
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Type
 from datetime import datetime
+from pydantic import BaseModel
 
 from app.logger import logger
 from app.mcp.client_manager import MCPClientManager
@@ -75,7 +76,12 @@ class TarsAgent:
         
         return final_response
 
-    async def _call_model(self, messages: List[BaseMessage], use_tools: bool = True) -> AIMessage:
+    async def _call_model(
+        self,
+        messages: List[BaseMessage],
+        use_tools: bool = True,
+        response_format: Optional[Type[BaseModel]] = None
+    ) -> AIMessage:
         """适配 LiteLLM 调用并返回 AIMessage"""
         llm_messages = []
         for m in messages:
@@ -111,11 +117,18 @@ class TarsAgent:
 
         # 调用 LiteLLM
         tools = self.mcp_manager.all_tools if (self.mcp_manager.all_tools and use_tools) else None
+        
+        completion_kwargs = {
+            "model": self.model,
+            "messages": llm_messages,
+            "tools": tools
+        }
+        if response_format:
+            completion_kwargs["response_format"] = response_format
+
         response = await asyncio.to_thread(
             completion,
-            model=self.model,
-            messages=llm_messages,
-            tools=tools
+            **completion_kwargs
         )
 
         resp_msg = response.choices[0].message
