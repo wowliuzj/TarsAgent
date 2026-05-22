@@ -52,6 +52,8 @@ graph LR
 - [docs/HARNESS_ENGINEERING.md](./docs/HARNESS_ENGINEERING.md): THP 2.0 约束协议、节点不变量和 L6 自愈沙箱技术规范。
 - [docs/SAFETY_AND_HITL.md](./docs/SAFETY_AND_HITL.md): 双重纵深防御与人机协同(HITL)机制。
 - [docs/METABASE_TRACE_DASHBOARD.md](./docs/METABASE_TRACE_DASHBOARD.md): Trace DB 化后的 Metabase 看板配置指南。
+- [docs/TIERED_REASONING.md](./docs/TIERED_REASONING.md): 仿生算力分级（Tiered Reasoning）配置与路由规范。
+- [docs/EVAL_GATE.md](./docs/EVAL_GATE.md): 评测集回归门禁与 CI 接入说明。
 - [CHANGELOG.md](./CHANGELOG.md): 版本变更历史。
 
 ## 🔎 可观测性回放
@@ -83,6 +85,23 @@ graph LR
   - `vw_trace_tool_calls`：工具调用统计与结果预览
   - `vw_trace_hitl_decisions`：HITL 决策统计
   - `vw_trace_auditor_verdicts`：审计通过/驳回分析
+  - `vw_trace_tier_transitions`：Tier 升降级行为分析
+
+## 🧠 Tiered Reasoning
+- 使用 `.env` 配置 `TIER_MODEL_LOW/MID/HIGH/ULTRA` 与角色默认层级。
+- 启用开关：`TIER_ROUTING_ENABLED=true`
+- Executor 支持 `L1~L6` 覆盖映射：`TIER_EXECUTOR_L1 ... TIER_EXECUTOR_L6`
+- 可设置自适应阈值与预算：`TIER_MAX_RETRIES_BEFORE_UPGRADE`、`TIER_BUDGET_TOKENS_PER_RUN`
+- 连接容错可配置：`MODEL_FALLBACK_NAME`、`LLM_MAX_RETRIES`、`LLM_RETRY_BASE_DELAY_MS`
+
+## ✅ Eval Gate
+- 运行回归门禁：
+  ```bash
+  python3 scripts/run_eval_gate.py --source auto
+  ```
+- 评测报告输出到：
+  - `evals/reports/eval_report_<timestamp>.json`
+  - `evals/reports/latest.json`
 
 ---
 *Stay Human. Stay Tars.*

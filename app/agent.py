@@ -2,6 +2,7 @@ import os
 import json
 import uuid
 import asyncio
+import random
 from typing import List, Dict, Any, Optional, Type
 from datetime import datetime
 from pydantic import BaseModel
@@ -10,6 +11,7 @@ from app.logger import logger, append_trace_event
 from app.mcp.client_manager import MCPClientManager
 from app.mcp.state import TarsState, Mission, Lane, TraceEvent
 from app.mcp.graph import TarsGraphBuilder
+from app.tier_routing import resolve_tier_and_model
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 from litellm import completion
 from app.prompts import BASE_SYSTEM_PROMPT, get_dynamic_project_context
@@ -20,6 +22,8 @@ class TarsAgent:
         self.model = os.getenv("MODEL_NAME")
         if not self.model:
             raise ValueError("错误: 未在环境变量中找到 MODEL_NAME。")
+        self._trace_token_usage: Dict[str, int] = {}
+        self.last_trace_id: Optional[str] = None
         
         self.mcp_manager = MCPClientManager()
         self._mcp_initialized = False
@@ -38,6 +42,8 @@ class TarsAgent:
         """执行 Tars 2.0 任务流"""
         await self._init_mcp()
         trace_id = str(uuid.uuid4())
+        self.last_trace_id = trace_id
+        self._trace_token_usage[trace_id] = 0
         
         # 获取动态项目上下文
         dynamic_context = get_dynamic_project_context()
@@ -88,6 +94,7 @@ class TarsAgent:
                 severity="error",
                 payload={"error": str(e)}
             ).model_dump())
+            self._trace_token_usage.pop(trace_id, None)
             raise
         
         # 3. 提取最终回答
@@ -114,6 +121,7 @@ class TarsAgent:
             event_type="agent_run_completed",
             payload={"response_length": len(final_response)}
         ).model_dump())
+        self._trace_token_usage.pop(trace_id, None)
         
         return final_response
 
@@ -123,9 +131,30 @@ class TarsAgent:
         use_tools: bool = True,
         response_format: Optional[Type[BaseModel]] = None,
         trace_id: Optional[str] = None,
-        caller_node: str = "unknown"
+        caller_node: str = "unknown",
+        precision_level: Optional[str] = None,
+        routing_state: Optional[Dict[str, Any]] = None,
     ) -> AIMessage:
         """适配 LiteLLM 调用并返回 AIMessage"""
+        def is_transient_llm_error(exc: Exception) -> bool:
+            msg = str(exc).lower()
+            transient_markers = [
+                "apiconnectionerror",
+                "connecterror",
+                "timeout",
+                "temporarily unavailable",
+                "connection reset",
+                "unexpected eof",
+                "ssl",
+                "tls",
+                "rate limit",
+                "429",
+                "503",
+                "502",
+                "504",
+            ]
+            return any(m in msg for m in transient_markers)
+
         llm_messages = []
         for m in messages:
             role = "user"
@@ -158,36 +187,131 @@ class TarsAgent:
             
             llm_messages.append(msg_dict)
 
-        # 调用 LiteLLM
+        # 调用 LiteLLM（含 Tiered Reasoning 路由）
         tools = self.mcp_manager.all_tools if (self.mcp_manager.all_tools and use_tools) else None
+        run_tokens_used = self._trace_token_usage.get(trace_id, 0) if trace_id else 0
+        tier_resolution = resolve_tier_and_model(
+            default_model=self.model,
+            caller_node=caller_node,
+            precision_level=precision_level,
+            state=routing_state,
+            run_tokens_used=run_tokens_used,
+        )
         
         completion_kwargs = {
-            "model": self.model,
+            "model": tier_resolution.model,
             "messages": llm_messages,
             "tools": tools
         }
         if response_format:
             completion_kwargs["response_format"] = response_format
         
-        if trace_id:
+        fallback_model = os.getenv("MODEL_FALLBACK_NAME")
+        model_candidates = [tier_resolution.model]
+        if fallback_model and fallback_model not in model_candidates:
+            model_candidates.append(fallback_model)
+
+        max_retries = int(os.getenv("LLM_MAX_RETRIES", "2"))
+        retry_base_delay_ms = int(os.getenv("LLM_RETRY_BASE_DELAY_MS", "800"))
+
+        response = None
+        last_err: Optional[Exception] = None
+        used_model = tier_resolution.model
+        if trace_id and tier_resolution.transition:
             append_trace_event(TraceEvent(
                 trace_id=trace_id,
                 event_id=str(uuid.uuid4()),
                 ts=datetime.utcnow().isoformat() + "Z",
                 node=caller_node,
-                event_type="llm_call_started",
+                event_type="tier_transition",
+                severity="warning",
                 payload={
-                    "model": self.model,
-                    "use_tools": use_tools,
-                    "message_count": len(llm_messages),
-                    "response_format": response_format.__name__ if response_format else None
+                    **tier_resolution.transition,
+                    "resolved_model": tier_resolution.model,
+                    "precision_level": precision_level,
                 }
             ).model_dump())
 
-        response = await asyncio.to_thread(
-            completion,
-            **completion_kwargs
-        )
+        for model_idx, candidate_model in enumerate(model_candidates):
+            for attempt in range(1, max_retries + 1):
+                try:
+                    attempt_kwargs = dict(completion_kwargs)
+                    attempt_kwargs["model"] = candidate_model
+
+                    if trace_id:
+                        if model_idx > 0 and attempt == 1:
+                            append_trace_event(TraceEvent(
+                                trace_id=trace_id,
+                                event_id=str(uuid.uuid4()),
+                                ts=datetime.utcnow().isoformat() + "Z",
+                                node=caller_node,
+                                event_type="llm_call_fallback",
+                                severity="warning",
+                                payload={
+                                    "from_model": model_candidates[0],
+                                    "to_model": candidate_model,
+                                    "reason": str(last_err)[:300] if last_err else "primary_failed",
+                                }
+                            ).model_dump())
+
+                        append_trace_event(TraceEvent(
+                            trace_id=trace_id,
+                            event_id=str(uuid.uuid4()),
+                            ts=datetime.utcnow().isoformat() + "Z",
+                            node=caller_node,
+                            event_type="llm_call_started",
+                            payload={
+                                "model": candidate_model,
+                                "default_model": self.model,
+                                "tier": tier_resolution.tier,
+                                "base_tier": tier_resolution.base_tier,
+                                "route_reason": tier_resolution.route_reason,
+                                "precision_level": precision_level,
+                                "use_tools": use_tools,
+                                "message_count": len(llm_messages),
+                                "response_format": response_format.__name__ if response_format else None,
+                                "run_tokens_used_before_call": run_tokens_used,
+                                "attempt": attempt,
+                                "max_retries": max_retries,
+                                "is_fallback_model": model_idx > 0,
+                            }
+                        ).model_dump())
+
+                    response = await asyncio.to_thread(
+                        completion,
+                        **attempt_kwargs
+                    )
+                    used_model = candidate_model
+                    break
+                except Exception as e:
+                    last_err = e
+                    transient = is_transient_llm_error(e)
+                    if trace_id:
+                        append_trace_event(TraceEvent(
+                            trace_id=trace_id,
+                            event_id=str(uuid.uuid4()),
+                            ts=datetime.utcnow().isoformat() + "Z",
+                            node=caller_node,
+                            event_type="llm_call_retry",
+                            severity="warning",
+                            payload={
+                                "model": candidate_model,
+                                "attempt": attempt,
+                                "max_retries": max_retries,
+                                "transient": transient,
+                                "error": str(e)[:400],
+                            }
+                        ).model_dump())
+                    if (not transient) or attempt >= max_retries:
+                        break
+                    delay_s = (retry_base_delay_ms / 1000.0) * (2 ** (attempt - 1)) + random.uniform(0, 0.2)
+                    await asyncio.sleep(delay_s)
+
+            if response is not None:
+                break
+
+        if response is None:
+            raise last_err if last_err else RuntimeError("LLM 调用失败且无具体异常信息。")
 
         resp_msg = response.choices[0].message
         
@@ -203,12 +327,16 @@ class TarsAgent:
         
         if trace_id:
             usage = {}
+            total_tokens = 0
             if hasattr(response, "usage") and response.usage:
                 usage = {
                     "prompt_tokens": getattr(response.usage, "prompt_tokens", None),
                     "completion_tokens": getattr(response.usage, "completion_tokens", None),
                     "total_tokens": getattr(response.usage, "total_tokens", None)
                 }
+                total_tokens = int(getattr(response.usage, "total_tokens", 0) or 0)
+            if trace_id:
+                self._trace_token_usage[trace_id] = self._trace_token_usage.get(trace_id, 0) + total_tokens
             append_trace_event(TraceEvent(
                 trace_id=trace_id,
                 event_id=str(uuid.uuid4()),
@@ -216,10 +344,13 @@ class TarsAgent:
                 node=caller_node,
                 event_type="llm_call_finished",
                 payload={
-                    "model": self.model,
+                    "model": used_model,
+                    "tier": tier_resolution.tier,
+                    "route_reason": tier_resolution.route_reason,
                     "tool_calls_count": len(tool_calls),
                     "content_length": len(resp_msg.content or ""),
-                    "usage": usage
+                    "usage": usage,
+                    "run_tokens_used_after_call": self._trace_token_usage.get(trace_id, run_tokens_used)
                 }
             ).model_dump())
         

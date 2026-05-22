@@ -1,5 +1,42 @@
 # Changelog
 
+## [2.7.1] - 2026-05-22
+### 🌐 LLM 网络稳定性增强：自动重试 + 备用模型回退
+
+#### 修复与优化
+- **LLM 调用容错增强 (`app/agent.py`)**:
+  - 为 `_call_model` 新增网络类异常自动重试（指数退避），覆盖 `APIConnectionError` / SSL EOF / timeout 等瞬时故障。
+  - 新增备用模型回退链路：主模型多次失败后自动切换 `MODEL_FALLBACK_NAME` 再尝试，降低单提供商抖动导致的整链路失败概率。
+  - 追踪事件新增 `llm_call_retry` 与 `llm_call_fallback`，便于在 trace 中回放网络故障恢复过程。
+- **配置增强 (`.env`, `env_example`)**:
+  - 新增 `MODEL_FALLBACK_NAME`、`LLM_MAX_RETRIES`、`LLM_RETRY_BASE_DELAY_MS`。
+- **文档更新 (`README.md`)**:
+  - 补充 LLM 连接容错相关配置说明。
+
+## [2.7.0] - 2026-05-22
+### 🧠 Tiered Reasoning 全量落地（Phase 1~4）+ Eval Gate 初版
+
+#### 新增能力
+- **仿生算力分级路由 (`app/tier_routing.py`, `app/agent.py`)**:
+  - 新增 Tier 路由核心，支持 `low/mid/high/ultra` 多档模型池。
+  - 支持按角色默认 Tier（Planner/Executor/Auditor/Reflect）路由模型。
+  - 支持 Executor 按 `L1~L6` 精度级别动态覆盖 Tier。
+- **自适应升降级（Phase 3）**:
+  - 当 Executor 审计驳回或重试达到阈值时自动升档（`TIER_MAX_RETRIES_BEFORE_UPGRADE`）。
+  - 当单次运行 token 超预算时自动降档（`TIER_BUDGET_TOKENS_PER_RUN` + `TIER_BUDGET_DOWNGRADE_TIER`）。
+  - 新增 `tier_transition` 追踪事件。
+- **节点级接入 (`app/mcp/graph.py`)**:
+  - 在 `planner/think/auditor/reflect` 的 `_call_model` 调用统一透传路由上下文。
+  - `think` 节点透传 `precision_level` 供 L1~L6 Tier 决策使用。
+- **Eval Gate（Phase 4）**:
+  - 新增 `scripts/run_eval_gate.py`，支持基于黄金集自动跑测并输出门禁结果。
+  - 新增示例数据集 `evals/golden_tasks.sample.jsonl`。
+  - 输出报告到 `evals/reports/`（含 `latest.json`）。
+- **配置与文档**:
+  - `.env` / `env_example` 新增 Tiered Reasoning 全套配置项。
+  - 新增 `docs/TIERED_REASONING.md` 与 `docs/EVAL_GATE.md`。
+  - `README.md` 新增 Tier 与 Eval Gate 使用说明。
+
 ## [2.6.6] - 2026-05-21
 ### 📊 Metabase 仪表盘模板补齐（可直接配置）
 

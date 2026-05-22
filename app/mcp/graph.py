@@ -366,7 +366,8 @@ class TarsGraphBuilder:
             use_tools=False,
             response_format=PlannerOutput,
             trace_id=state["trace_id"],
-            caller_node="planner"
+            caller_node="planner",
+            routing_state=state,
         )
         plan_text = response.content
         logger.info(f"[*] Planner 制定的计划:\n{plan_text}")
@@ -521,7 +522,9 @@ class TarsGraphBuilder:
         response = await self.agent._call_model(
             messages,
             trace_id=state["trace_id"],
-            caller_node="think"
+            caller_node="think",
+            precision_level=level,
+            routing_state=state,
         )
         
         # 如果 Executor 没有调用工具，而是直接输出回答，记录下来供审计排查
@@ -881,7 +884,8 @@ class TarsGraphBuilder:
             use_tools=False,
             response_format=AuditorVerdict,
             trace_id=state["trace_id"],
-            caller_node="auditor"
+            caller_node="auditor",
+            routing_state=state,
         )
         raw_verdict = response.content.strip()
         logger.info(f"[*] Auditor raw output: {raw_verdict}")
@@ -1002,7 +1006,8 @@ class TarsGraphBuilder:
             messages,
             use_tools=False,
             trace_id=state["trace_id"],
-            caller_node="reflect"
+            caller_node="reflect",
+            routing_state=state,
         )
         trace_events.append(make_trace_event(
             state,

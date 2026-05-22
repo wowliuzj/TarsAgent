@@ -74,3 +74,14 @@ SELECT
 FROM trace_events e
 WHERE e.event_type = 'auditor_verdict';
 
+CREATE OR REPLACE VIEW vw_trace_tier_transitions AS
+SELECT
+    e.trace_id,
+    e.ts,
+    e.node,
+    e.payload->>'from_tier' AS from_tier,
+    e.payload->>'to_tier' AS to_tier,
+    e.payload->>'trigger' AS trigger,
+    e.payload->>'resolved_model' AS resolved_model
+FROM trace_events e
+WHERE e.event_type = 'tier_transition';

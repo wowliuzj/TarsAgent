@@ -93,6 +93,14 @@ graph TD
     7.  Phase 2 支持 trace 双写入 PostgreSQL（`TRACE_SINK_MODE=both`），并新增 `trace_runs` / `trace_events` 表用于结构化查询。
     8.  提供 Metabase 视图脚本 [scripts/metabase_trace_views.sql](file:///Users/Shared/Workspace/Tars/TarsAgent/scripts/metabase_trace_views.sql)，可通过 [scripts/apply_metabase_views.py](file:///Users/Shared/Workspace/Tars/TarsAgent/scripts/apply_metabase_views.py) 一键应用。
 
+### 1.8 仿生算力分级 (Tiered Reasoning)
+*   **核心实现**: [app/tier_routing.py](file:///Users/Shared/Workspace/Tars/TarsAgent/app/tier_routing.py), [app/agent.py](file:///Users/Shared/Workspace/Tars/TarsAgent/app/agent.py)
+*   **设计细节**:
+    1.  Role 默认分层：Planner/Executor/Auditor/Reflect 支持不同默认 Tier（`low/mid/high/ultra`）。
+    2.  Executor 的精度覆盖：可按 `L1~L6` 单独映射 Tier，实现“低风险低算力，高精度高算力”。
+    3.  自适应升降级：在审计驳回或重试阈值触发时自动升档，在 token 预算超限时自动降档。
+    4.  全链路可观测：`llm_call_*` 事件记录 `tier/base_tier/route_reason`，并新增 `tier_transition` 事件。
+
 ---
 
 ## 🧪 2. 约束规范单元验证

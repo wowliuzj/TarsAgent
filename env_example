@@ -47,3 +47,38 @@ TRACE_TOOL_PREVIEW_CHARS=280
 AUDITOR_L1_FAST_PATH_ENABLED=true
 # trace 事件写入目的地: jsonl / db / both (默认 both)
 TRACE_SINK_MODE=both
+
+# --- Tiered Reasoning (仿生算力分级) ---
+# 是否启用 Tier 路由
+TIER_ROUTING_ENABLED=false
+# Tier 对应模型池
+TIER_MODEL_LOW=openai/gpt-5-mini
+TIER_MODEL_MID=openai/gpt-5-mini
+TIER_MODEL_HIGH=openai/gpt-5
+TIER_MODEL_ULTRA=openai/gpt-5
+# 各角色默认 Tier
+TIER_DEFAULT_PLANNER=mid
+TIER_DEFAULT_EXECUTOR=mid
+TIER_DEFAULT_AUDITOR=high
+TIER_DEFAULT_REFLECT=mid
+# Executor 的 L1~L6 覆盖 Tier（可按需调整）
+TIER_EXECUTOR_L1=low
+TIER_EXECUTOR_L2=low
+TIER_EXECUTOR_L3=mid
+TIER_EXECUTOR_L4=mid
+TIER_EXECUTOR_L5=high
+TIER_EXECUTOR_L6=ultra
+# 自适应升级阈值：executor 重试达到阈值后自动升一档
+TIER_MAX_RETRIES_BEFORE_UPGRADE=2
+# 单次运行 token 预算（0 表示关闭预算降级）
+TIER_BUDGET_TOKENS_PER_RUN=0
+# 超预算后降级到的 Tier
+TIER_BUDGET_DOWNGRADE_TIER=low
+
+# --- LLM 连接稳定性容错 ---
+# 主模型连接失败时可回退到备用模型（为空则不启用回退）
+MODEL_FALLBACK_NAME=
+# 单模型最大重试次数（含首次）
+LLM_MAX_RETRIES=2
+# 重试基础退避毫秒
+LLM_RETRY_BASE_DELAY_MS=800

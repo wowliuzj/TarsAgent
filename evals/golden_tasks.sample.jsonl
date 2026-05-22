@@ -1,0 +1,6 @@
+{"id":"l1_chat_style","precision_level":"L1","prompt":"你说话风格有点生硬，能不能更自然一点？","must_include":["理解","改进"]}
+{"id":"l2_macro_plan","precision_level":"L2","prompt":"给我一个3个月内从0到1搭建AI产品的宏观计划。","must_include":["阶段","目标"]}
+{"id":"l3_practical","precision_level":"L3","prompt":"给我一份团队每周技术复盘会议的模板。","must_include":["议程","行动项"]}
+{"id":"l4_research","precision_level":"L4","prompt":"分析过去两周BTC价格波动的主要因素并给出结构化结论。","must_include":["因素","结论"]}
+{"id":"l5_factual","precision_level":"L5","prompt":"给我一份高保真事实核查的执行清单，强调来源与校验。","must_include":["来源","校验"]}
+{"id":"l6_transaction","precision_level":"L6","prompt":"给出一套严格事务级代码变更流程，必须包含测试与回滚控制。","must_include":["测试","回滚"]}

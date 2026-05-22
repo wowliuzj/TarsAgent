@@ -22,6 +22,7 @@ python3 scripts/apply_metabase_views.py
 - `vw_trace_tool_calls`
 - `vw_trace_hitl_decisions`
 - `vw_trace_auditor_verdicts`
+- `vw_trace_tier_transitions`
 
 ## 3. 推荐仪表盘组件
 
@@ -46,7 +47,7 @@ python3 scripts/apply_metabase_views.py
    - 来源：`vw_trace_auditor_verdicts`
    - 指标：`approved=true` 占比
 
-## 5. 仪表盘模板（可直接照抄）
+## 4. 仪表盘模板（可直接照抄）
 
 建议仪表盘名：`Tars Trace Observability (Prod)`
 
@@ -216,7 +217,21 @@ WHERE trace_id = {{trace_id}}
 ORDER BY ts ASC;
 ```
 
-## 4. Trace 回放联动建议
+### 卡片 11：Tier 升降级触发分布（近 14 天）
+- 类型：Bar
+- 来源：`vw_trace_tier_transitions`
+
+```sql
+SELECT
+  trigger,
+  count(*) AS transition_count
+FROM vw_trace_tier_transitions
+WHERE ts >= now() - interval '14 day'
+GROUP BY 1
+ORDER BY 2 DESC;
+```
+
+## 5. Trace 回放联动建议
 
 - Metabase 卡片点击进入明细时，显示 `trace_id`。
 - 用 `trace_id` 直接执行：
