@@ -1,21 +1,23 @@
-# 🪐 Tars 2.0 「多智能体约束协议与自愈沙箱机制」技术规范 (HARNESS_ENGINEERING)
+# 🪐 Tars 2.0 「多智能体约束协议与运行时可靠性」技术规范 (HARNESS_ENGINEERING)
 
-本规范详细阐述了 Tars 2.0 (基于 LangGraph 状态机与多智能体协作架构) 所实现的 **「Tars 约束协议 2.0 (THP 2.0)」** 与 **「高精度 L6 自愈沙箱 (L6 Self-Healing Sandbox)」** 的架构设计、技术实现与验证细节。
+本规范详细阐述了 Tars 2.0 (基于 LangGraph 状态机与多智能体协作架构) 所实现的 **「Tars 约束协议 2.1 (THP 2.1)」**、**「高精度 L6 自愈沙箱 (L6 Self-Healing Sandbox)」**、**「仿生算力分级 (Tiered Reasoning)」** 与 **「Eval Gate 回归门禁」** 的架构设计、技术实现与验证细节。
 
-通过引入强类型契约、契约级前后置状态断言、动态 Token 历史剪裁以及自动化本地自愈循环，Tars 摆脱了传统大模型应用中 flakiness (脆弱/随机文本匹配) 的通病，转型为具备严苛软件工程质量保障的自治智能体系统。
+通过引入强类型契约、契约级前后置状态断言、动态 Token 历史剪裁、自动化本地自愈循环、角色级 LLM 路由以及端到端评测门禁，Tars 摆脱了传统大模型应用中 flakiness (脆弱/随机文本匹配) 的通病，转型为具备严苛软件工程质量保障的自治智能体系统。
 
 ---
 
 ## 🛠️ 1. 核心架构设计
 
-THP 2.0 的核心理念是：**“协议即契约，状态即真理，代码需自检，错误可自愈。”**
+THP 2.1 的核心理念是：**“协议即契约，状态即真理，算力需匹配，错误可自愈，质量可门禁。”**
 
 ```mermaid
 graph TD
     User([用户原始需求]) -->|Mission.goal| Planner[1. PM 规划者节点]
+    TierPlanner[Tier Router: Role 默认档位] --> Planner
     Planner -->|PlannerOutput Contract| Invariant1{前置校验 & 不变量断言}
     Invariant1 -->|Pass| TaskPool[SubTask 计划池]
-    TaskPool -->|Precision Level: L1~L6| Executor[2. Executor 执行官节点]
+    TaskPool -->|Precision Level: L1~L6| TierExecutor[Tier Router: Executor L级覆盖]
+    TierExecutor --> Executor[2. Executor 执行官节点]
     Executor -->|ExecutorThought Contract| Invariant2{后置校验 & 不变量断言}
     Invariant2 -->|Pass| L6Check{是否触发 L6 任务?}
     
@@ -23,12 +25,20 @@ graph TD
     PytestSandbox -->|测试失败: Exit != 0| SelfHealing[自愈回路: traceback 反馈给 Executor 重试]
     SelfHealing --> Executor
     
-    L6Check -->|No / Pytest Pass| Auditor[4. Auditor 质量审计节点]
+    L6Check -->|No / Pytest Pass| TierAuditor[Tier Router: Auditor 默认档位]
+    TierAuditor --> Auditor[4. Auditor 质量审计节点]
     Auditor -->|AuditorVerdict Contract| Invariant3{审计不变量断言}
     Invariant3 -->|Pass| VerdictDecision{审计通过?}
     
-    VerdictDecision -->|Rejected| ResetIndex[重置步进为 0 / 扣减重试次数] --> Executor
-    VerdictDecision -->|Approved| Reflect[5. Reflect 归纳反思节点] --> Answer([最终高品质回答])
+    VerdictDecision -->|Rejected| ResetIndex[重置步进为 0 / 扣减重试次数]
+    ResetIndex -->|触发升档条件| TierExecutor
+    VerdictDecision -->|Approved| TierReflect[Tier Router: Reflect 默认档位]
+    TierReflect --> Reflect[5. Reflect 归纳反思节点] --> Answer([最终高品质回答])
+
+    Planner -.-> CallModel[_call_model: retry + fallback + trace]
+    Executor -.-> CallModel
+    Auditor -.-> CallModel
+    Reflect -.-> CallModel
 ```
 
 ### 1.1 强类型结构化数据契约 (Pydantic Models)
@@ -43,7 +53,7 @@ graph TD
 *   **核心实现**: [app/agent.py](file:///Users/Shared/Workspace/Tars/TarsAgent/app/agent.py) 与 [app/prompts.py](file:///Users/Shared/Workspace/Tars/TarsAgent/app/prompts.py)
 *   **设计细节**:
     *   **架构适配**：升级 `_call_model` 以支持 `response_format` 强约束参数。当指定 Pydantic 模型类时，框架会自动使用 LiteLLM / OpenAI 的结构化输出（Structured JSON Outputs）契约，强制大模型返回符合 Pydantic 定义的 JSON 字符串。
-    *   **两级健壮解析与容错退避**：若遇到极少数因网络抖动或旧接口无法解析结构化 JSON 的异常，程序自动激活备用提取器。例如，如果 `Planner` 输出不是合法的 JSON，系统会优雅退避到正则提取和字段修复，防止调用链崩溃，确保了系统的极致稳定性。
+    *   **两级健壮解析与容错退避**：若遇到极少数因旧接口无法解析结构化 JSON 的异常，程序自动激活备用提取器。例如，如果 `Planner` 输出不是合法的 JSON，系统会优雅退避到正则提取和字段修复，防止调用链崩溃，确保了系统的稳定性。
     *   **Tool Calling 与结构化输出的完美融合**：由于在同一模型调用中，部分 LLM 无法同时启用特种工具集 (`tools`) 和 `response_format` JSON 模式。我们在 `Executor` 节点设计了巧妙的“单指令嵌入式协议”：Executor 调用物理工具时，系统强制要求其在文本内容中输出符合 JSON 契约的 thought 字段。
 
 ### 1.3 节点级状态机不变量断言验证 (State Invariants Assertion)
@@ -65,7 +75,7 @@ graph TD
 ### 1.5 L6 高精度 Sandbox 事务自愈回路
 *   **核心实现**: [app/mcp/graph.py](file:///Users/Shared/Workspace/Tars/TarsAgent/app/mcp/graph.py) 中的 `register_step_node`
 *   **设计细节**:
-    对于极高风险、涉及代码生成或底层系统指令修改的精度为 `L6` (Strict Transactional) 的超复杂任务，THP 2.0 上线了**自动测试哨兵与自愈回路 (Auto-Testing & Self-Healing)**：
+    对于极高风险、涉及代码生成或底层系统指令修改的精度为 `L6` (Strict Transactional) 的超复杂任务，THP 2.1 延续并强化了**自动测试哨兵与自愈回路 (Auto-Testing & Self-Healing)**：
     1.  **沙箱隔离执行**：Executor 在完成子步骤的代码编写后，框架在 `register_step_node` 节点拦截提交，并执行可配置测试命令（`L6_SANDBOX_TEST_CMD`，默认 `.venv/bin/pytest -q`）。
     2.  **错误捕获与自愈**：如果 pytest 执行返回非零退出码（测试用例失败、语法错误或断言失效），系统拒绝将问题代码提交给审计员或用户，而是：
         *   **保持任务步进索引不变**；
@@ -96,16 +106,26 @@ graph TD
 ### 1.8 仿生算力分级 (Tiered Reasoning)
 *   **核心实现**: [app/tier_routing.py](file:///Users/Shared/Workspace/Tars/TarsAgent/app/tier_routing.py), [app/agent.py](file:///Users/Shared/Workspace/Tars/TarsAgent/app/agent.py)
 *   **设计细节**:
-    1.  Role 默认分层：Planner/Executor/Auditor/Reflect 支持不同默认 Tier（`low/mid/high/ultra`）。
-    2.  Executor 的精度覆盖：可按 `L1~L6` 单独映射 Tier，实现“低风险低算力，高精度高算力”。
+    Harness 不只负责“结构正确”，也负责“算力匹配正确”。Tiered Reasoning 将 THP 的 `role` 与 `precision_level` 转化为可配置的模型路由策略，让低风险任务节省成本，高精度任务获得更强模型保障。
+    1.  Role 默认分层：Planner/Executor/Auditor/Reflect 支持不同默认 Tier（`low/mid/high/ultra`），通过 `TIER_DEFAULT_PLANNER`、`TIER_DEFAULT_EXECUTOR`、`TIER_DEFAULT_AUDITOR`、`TIER_DEFAULT_REFLECT` 配置。
+    2.  Executor 的精度覆盖：可按 `L1~L6` 单独映射 Tier（`TIER_EXECUTOR_L1` 到 `TIER_EXECUTOR_L6`），实现“低风险低算力，高精度高算力”。
     3.  自适应升降级：在审计驳回或重试阈值触发时自动升档，在 token 预算超限时自动降档。
-    4.  全链路可观测：`llm_call_*` 事件记录 `tier/base_tier/route_reason`，并新增 `tier_transition` 事件。
+    4.  全链路可观测：`llm_call_*` 事件记录 `tier/base_tier/route_reason/precision_level`，并新增 `tier_transition` 事件。
+    5.  详细运维口径见 [docs/TIERED_REASONING.md](file:///Users/Shared/Workspace/Tars/TarsAgent/docs/TIERED_REASONING.md)。
+
+### 1.9 LLM 调用可靠性保护 (Retry & Fallback)
+*   **核心实现**: [app/agent.py](file:///Users/Shared/Workspace/Tars/TarsAgent/app/agent.py) 中的 `_call_model`
+*   **设计细节**:
+    1.  网络类瞬时故障自动重试：覆盖 `APIConnectionError`、SSL EOF、timeout 等 LLM Provider 抖动场景，重试次数由 `LLM_MAX_RETRIES` 控制，退避基线由 `LLM_RETRY_BASE_DELAY_MS` 控制。
+    2.  备用模型回退：主模型连续失败后，可通过 `MODEL_FALLBACK_NAME` 切换到备用模型再次尝试，降低单模型或单供应商短时异常对整条 LangGraph 链路的影响。
+    3.  结构化 Trace：新增 `llm_call_retry` 与 `llm_call_fallback` 事件，结合 `llm_call_started/finished` 可回放每次失败、重试和回退的完整过程。
+    4.  与 Tier Router 协同：先按角色与精度解析目标模型，再在该模型失败时触发 retry/fallback；因此 Harness 同时保留“算力匹配”和“故障恢复”两个维度的可解释性。
 
 ---
 
 ## 🧪 2. 约束规范单元验证
 
-为了确保契约框架长效稳定，在 `tests/` 目录下新增了高精度测试套件，对所有约束、滑动窗口、断言以及自愈沙箱场景进行了 100% 的单元覆盖。
+为了确保契约框架长效稳定，Harness 采用两层验证：单元测试验证契约、断言、滑动窗口和自愈沙箱；Eval Gate 验证端到端任务质量、审计通过率和模型路由改动后的回归风险。
 
 ### 2.1 自动化契约测试
 *   **测试文件**: [tests/test_harness_contracts.py](file:///Users/Shared/Workspace/Tars/TarsAgent/tests/test_harness_contracts.py)
@@ -116,6 +136,14 @@ graph TD
     4.  `test_l6_self_testing_healing_loop`：模拟了一个编写了错误代码的 `L6` 步骤。测试用例 Mock 了 pytest 执行失败的情况，验证框架是否能够安全地：保持 `current_task_index` 指针不向下滚动、自动计算 `executor_retries` 计数、将报错堆栈作为 System 反馈精准拼接到历史中，并触发下一次 Executor 的重规。
     5.  `test_response_unwrapping_double_defense`：验证简单聊天或合成节点中，成果脱壳提炼与双重防御机制的有效性。确保在系统全局强制执行结构化 JSON 约束下，用户终端能且只能接收到纯净、自然的文字，绝不泄露任何系统底层协议的 JSON 封装。
 
+### 2.2 Eval Gate 端到端回归门禁
+*   **核心实现**: [scripts/run_eval_gate.py](file:///Users/Shared/Workspace/Tars/TarsAgent/scripts/run_eval_gate.py), [docs/EVAL_GATE.md](file:///Users/Shared/Workspace/Tars/TarsAgent/docs/EVAL_GATE.md)
+*   **设计细节**:
+    1.  黄金集按 `L1~L6` 覆盖典型任务，使用 `must_include` 做轻量质量断言，并从 trace 中提取审计结果、token 用量和耗时。
+    2.  报告输出到 `evals/reports/eval_report_<timestamp>.json` 与 `evals/reports/latest.json`，包含 `success_rate_pct`、`audit_pass_rate_pct`、`avg_total_tokens` 和 `avg_duration_seconds`。
+    3.  门禁阈值通过 `--min-success-rate` 与 `--min-audit-pass-rate` 控制，不达标时返回非零退出码，便于后续接入 CI。
+    4.  Tiered Reasoning 每次调整模型映射、升降级阈值或 fallback 策略后，都应运行 Eval Gate，确认“降本”没有变成“降质”。
+
 ---
 
 ## 🚀 3. 约束测试套件运行与验证指令
@@ -123,6 +151,11 @@ graph TD
 在根目录下执行 pytest 测试套件即可对 Tars 约束协议的所有功能进行跑测验证：
 ```bash
 .venv/bin/pytest tests/test_harness_contracts.py -v
+```
+
+在调整 Tier 路由或 LLM fallback 策略后，执行 Eval Gate 做端到端回归验证：
+```bash
+python3 scripts/run_eval_gate.py --source auto --min-success-rate 80 --min-audit-pass-rate 70
 ```
 
 ### 3.1 运行结果输出
@@ -149,5 +182,7 @@ tests/test_harness_contracts.py::test_response_unwrapping_double_defense PASSED 
 
 ## 🪐 4. 重构核心工程哲学总结
 
-*   **编译型智能体**：THP 2.0 使 Tars 彻底告别了依靠巧合和运气堆砌的提示词运行模式，转为类似于静态语言编译器的“契约型”运行体系。每个阶段的输入、输出、中间状态均拥有严苛的静态与运行时类型约束。
+*   **编译型智能体**：THP 2.1 使 Tars 彻底告别了依靠巧合和运气堆砌的提示词运行模式，转为类似于静态语言编译器的“契约型”运行体系。每个阶段的输入、输出、中间状态均拥有严苛的静态与运行时类型约束。
 *   **生产级自愈能力**：将“本地 pytest 执行报错反馈”设计为智能体的原生感官。错误不再是终结任务的灾难，而是促使 Tars 灵魂反思并不断优化自身代码的进化级养料，实现了极高难任务交付的绝对高确定性。
+*   **算力治理能力**：Tier Router 将角色职责与 `L1~L6` 精度契约映射到不同模型档位，让 Harness 从“会不会做对”继续推进到“该用多少算力做对”。
+*   **质量门禁能力**：Eval Gate 将端到端表现转化为可比较的报告和退出码，使模型路由、提示词和容错策略的迭代都有可回放、可阻断、可审计的质量边界。
